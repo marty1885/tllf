@@ -77,6 +77,17 @@ struct MarkdownLikeParser : public LanguageParser
 
 struct PromptTemplate
 {
+    PromptTemplate() = default;
+    PromptTemplate(const std::string& prompt, const std::unordered_map<std::string, std::string>& variables = {})
+        : prompt(prompt), variables(variables)
+    {
+    }
+
+    void addVariable(const std::string& name, const std::string& value)
+    {
+        variables[name] = value;
+    }
+
     std::string prompt;
     std::unordered_map<std::string, std::string> variables;
 

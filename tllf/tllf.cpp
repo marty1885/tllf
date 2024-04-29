@@ -1,3 +1,5 @@
+#include <stdexcept>
+#include <string_view>
 #include <tllf/tllf.hpp>
 
 #include <drogon/HttpClient.h>
@@ -91,8 +93,13 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
 {
     nlohmann::json parsed;
     std::string_view remaining(reply);
+    size_t last_remaining_size = -1;
 
     while(!remaining.empty()) {
+        if(remaining.size() == last_remaining_size)
+            throw std::runtime_error("Parser stuck in infinite loop. THIS IS A BUG.");
+        last_remaining_size = remaining.size();
+
         // skip leading whitespace
         size_t pos = remaining.find_first_not_of(" \t\n");
         if(pos == std::string::npos)
@@ -107,7 +114,8 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
             if(it == parsed.end())
                 parsed["-"] = std::string(remaining);
             else
-                parsed["-"].get<std::string>() = std::string(remaining);
+                parsed["-"].get<std::string>() += std::string(remaining);
+            break;
         }
 
         // extract variable name and get rid of leading/trailing whitespace/decorators
@@ -117,35 +125,51 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
         remaining = remaining.substr(colon_pos + 1);
         bool is_list = false;
         auto next_line_pos = remaining.find('\n');
+        std::string_view next_line = remaining;
         if(next_line_pos != std::string::npos) {
             std::string_view next_line = remaining.substr(next_line_pos + 1);
             size_t non_whitespace = next_line.find_first_not_of(" \t\n");
             is_list = non_whitespace != std::string::npos && (next_line[non_whitespace] == '-' || next_line[non_whitespace] == '*');
-            remaining = remaining.substr(next_line_pos + 1);
+            if(is_list) {
+                remaining = remaining.substr(next_line_pos + 1);
+            }
         }
+        else {
+            is_list = remaining.find('-') != std::string::npos || remaining.find('*') != std::string::npos;
+        }
+
         if(is_list) {
             std::vector<std::string> list;
             while(!remaining.empty()) {
                 size_t newline_pos = remaining.find('\n');
-                if(newline_pos == std::string::npos)
-                    break;
-                std::string_view line = remaining.substr(0, newline_pos);
+                std::string_view line = remaining;
+                if(newline_pos != std::string::npos) {
+                    line = remaining.substr(0, newline_pos);
+                    remaining = remaining.substr(newline_pos + 1);
+                }
                 size_t non_whitespace = line.find_first_not_of(" \t\n");
                 if(non_whitespace != std::string::npos && (line[non_whitespace] == '-' || line[non_whitespace] == '*')) {
-                    list.push_back(std::string(line.substr(non_whitespace + 1)));
-                } else {
+                    list.push_back(utils::trim(line.substr(non_whitespace + 1)));
+                }
+                else {
                     break;
                 }
-                remaining = remaining.substr(newline_pos + 1);
+
+                if(newline_pos == std::string::npos) {
+                    remaining = "";
+                    break;
+                }
             }
             parsed[std::string(varname)] = std::move(list);
         }
         else {
             // string
             size_t newline_pos = remaining.find('\n');
-            if(newline_pos == std::string::npos)
+            if(newline_pos == std::string::npos) {
+                parsed[std::string(varname)] = utils::trim(remaining);
                 break;
-            parsed[std::string(varname)] = std::string(remaining.substr(0, newline_pos));
+            }
+            parsed[std::string(varname)] = utils::trim(remaining.substr(0, newline_pos));
             remaining = remaining.substr(newline_pos + 1);
         }
 

@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Drogon REQUIRED)
 
+option(TLLF_BUILD_EXAMPLE "Build example" ON)
+option(TLLF_BUILD_TESTS "Build tests" OFF)
+
 add_library(tllf)
 target_include_directories(tllf PUBLIC .)
 target_precompile_headers(tllf PRIVATE tllf/pch.hpp)
@@ -14,4 +17,10 @@ target_sources(tllf PRIVATE
 )
 target_link_libraries(tllf PRIVATE Drogon::Drogon)
 
-add_subdirectory(example)
+if(TLLF_BUILD_EXAMPLE)
+    add_subdirectory(example)
+endif()
+
+if(TLLF_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
