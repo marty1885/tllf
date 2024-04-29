@@ -16,7 +16,6 @@ DROGON_TEST(MarkdownLikeParser)
 {
     MarkdownLikeParser parser;
     auto parsed = parser.parseReply("**interests**:\n - music\n - sports\nTom is a good person");
-    std::cout << parsed.dump(4) << std::endl;
     REQUIRE(parsed.contains("interests"));
     REQUIRE(parsed["interests"].is_array());
     REQUIRE(parsed["interests"].size() == 2);
@@ -25,15 +24,21 @@ DROGON_TEST(MarkdownLikeParser)
     REQUIRE(parsed["-"] == "Tom is a good person");
 
     parsed = parser.parseReply("Tom is a good person");
-    std::cout << parsed.dump(4) << std::endl;
     REQUIRE(parsed.contains("-"));
     REQUIRE(parsed["-"] == "Tom is a good person");
 
     parsed = parser.parseReply("Task:\n - buy milk");
-    std::cout << parsed.dump(4) << std::endl;
-    REQUIRE(parsed.contains("Task"));
-    REQUIRE(parsed["Task"].is_array());
-    REQUIRE(parsed["Task"].size() == 1);
+    REQUIRE(parsed.contains("task"));
+    REQUIRE(parsed["task"].is_array());
+    REQUIRE(parsed["task"].size() == 1);
+
+    parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"] == "I need to wake up 9:00 AM tomorrow.");
+
+    parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"] == "I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
 }
 
 int main(int argc, char** argv)
