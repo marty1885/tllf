@@ -10,6 +10,24 @@ DROGON_TEST(PromptTemplate)
 
     prompt = PromptTemplate("Your name is {name} and you are a happy");
     REQUIRE_THROWS(prompt.render());
+
+    prompt = PromptTemplate(R"(Escaped \{variables\} must not be rendered)");
+    REQUIRE(prompt.render() == R"(Escaped \{variables\} must not be rendered)");
+
+    prompt = PromptTemplate("Nested {replacment {is}} not allowed");
+    REQUIRE_THROWS(prompt.render());
+
+    prompt = PromptTemplate(R"(Invalid {escape\} should throw)");
+    REQUIRE_THROWS(prompt.render());
+
+    prompt = PromptTemplate("No variables");
+    REQUIRE(prompt.render() == "No variables");
+
+    prompt = PromptTemplate("Recurrent replacment is Ok {var}", {{"var", "{var2}"}, {"var2", "value"}});
+    REQUIRE(prompt.render() == "Recurrent replacment is Ok value");
+
+    prompt = PromptTemplate("But be careful with cyclic replacment {var}", {{"var", "{var2}"}, {"var2", "{var}"}});
+    REQUIRE_THROWS(prompt.render());
 }
 
 DROGON_TEST(MarkdownLikeParser)

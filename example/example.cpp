@@ -9,9 +9,8 @@ Task<> func()
     auto llm = std::make_shared<tllf::OpenAIConnector>("meta-llama/Meta-Llama-3-8B-Instruct", "https://api.deepinfra.com", tllf::internal::env("DEEPINFRA_API_KEY"));
     auto config = tllf::TextGenerationConfig();
 
-    tllf::PromptTemplate prompt;
-    prompt.prompt = "Your name is {name} and you are a happy young girl.";
-    prompt.variables = {{"name", "Lacia"},};
+    tllf::PromptTemplate prompt("Your name is {name} and you are a happy young girl.");
+    prompt.setVariable("name", "Lacia");
 
     std::vector<tllf::ChatEntry> chatlog = {{prompt.render(), "system"}, {"How are you?", "user"}};
     auto result = co_await llm->generate(chatlog, config);

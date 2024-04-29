@@ -9,7 +9,6 @@
 #include <string>
 #include <trantor/net/EventLoop.h>
 #include <unordered_map>
-#include <trantor/net//EventLoopThread.h>
 #include <nlohmann/json.hpp>
 #include <vector>
 #include <unordered_set>
@@ -83,7 +82,7 @@ struct PromptTemplate
     {
     }
 
-    void addVariable(const std::string& name, const std::string& value)
+    void setVariable(const std::string& name, const std::string& value)
     {
         variables[name] = value;
     }

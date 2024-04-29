@@ -86,7 +86,7 @@ drogon::Task<std::string> OpenAIConnector::generate(std::vector<ChatEntry> histo
     body["messages"] = historyJson;
     req->setBody(body.dump());
     req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-    auto resp             = co_await client->sendRequestCoro(req);
+    auto resp = co_await client->sendRequestCoro(req);
     // std::cerr << resp->body() << std::endl;
     auto json = nlohmann::json::parse(resp->body());
     co_return json["choices"][0]["message"]["content"].get<std::string>();
@@ -121,11 +121,6 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
 
         std::string line = peek_next_line();
         consume_line();
-
-        if(line.empty()) {
-            continue;
-        }
-
         std::string trimmed = utils::trim(line);
         if(trimmed.empty()) {
             continue;
@@ -201,12 +196,18 @@ std::unordered_set<std::string> PromptTemplate::extractVars(const std::string& p
     std::unordered_set<std::string> prompt_vars;
     std::string varname;
     bool inVar = false;
-    for(auto ch : prompt) {
-        if(ch == '{') {
+    for(size_t i = 0; i < prompt.size(); i++) {
+        char ch = prompt[i];
+        if(ch == '\\') {
+            if(i + 1 >= prompt.size())
+                throw std::runtime_error("Escape character at end of prompt");
+            i++;
+        }
+        else if(ch == '{' && inVar == false) {
             inVar = true;
             continue;
         }
-        else if(ch == '}') {
+        else if(ch == '}' && inVar == true) {
             inVar = false;
             prompt_vars.insert(varname);
             varname.clear();
