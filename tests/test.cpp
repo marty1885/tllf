@@ -57,6 +57,29 @@ DROGON_TEST(MarkdownLikeParser)
     parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
     REQUIRE(parsed.contains("-"));
     REQUIRE(parsed["-"] == "I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
+
+    parsed = parser.parseReply("The book \"The Lord of the Rings: The Fellowship of the Ring\" is a good book.");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"] == "The book \"The Lord of the Rings: The Fellowship of the Ring\" is a good book.");
+}
+
+DROGON_TEST(JsonParser)
+{
+    std::string reply = R"(```json
+{"distance": 11971, "explanation": "The distance between Taipei and New York is approximately 11,971 kilometers (7,454 miles). This distance is calculated as the straight-line distance between the two cities, and does not take into account the actual travel time or route taken."}
+```)";
+    JsonParser parser;
+    auto parsed = parser.parseReply(reply);
+    REQUIRE(parsed.contains("distance"));
+    REQUIRE(parsed.contains("explanation"));
+    REQUIRE(parsed["distance"] == 11971);
+    REQUIRE(parsed["explanation"] == "The distance between Taipei and New York is approximately 11,971 kilometers (7,454 miles). This distance is calculated as the straight-line distance between the two cities, and does not take into account the actual travel time or route taken.");
+
+
+    reply = R"({"test": "This is a test"})";
+    parsed = parser.parseReply(reply);
+    REQUIRE(parsed.contains("test"));
+    REQUIRE(parsed["test"] == "This is a test");
 }
 
 int main(int argc, char** argv)

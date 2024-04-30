@@ -7,6 +7,7 @@
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <trantor/net/EventLoop.h>
 #include <unordered_map>
 #include <nlohmann/json.hpp>
@@ -25,7 +26,7 @@ std::string env(const std::string& key);
 namespace utils
 {
 std::string replaceAll(std::string str, const std::string& from, const std::string& to);
-std::string trim(const std::string_view str, const std::string_view whitespace = " \t\n");
+std::string_view trim(const std::string_view str, const std::string_view whitespace = " \t\n");
 }
 
 struct TextGenerationConfig
@@ -69,9 +70,41 @@ struct LanguageParser
     virtual nlohmann::json parseReply(const std::string& reply) = 0;
 };
 
+/**
+ * Parses a reply in a markdown-like format. (like. meaning it is not a full markdown parser)
+ * For example:
+ * interest:
+ * - music
+ * - sports
+ * 
+ * Other interests are not important.
+ *
+ * Will be parsed as:
+ * {
+ *     "interest": ["music", "sports"],
+ *     "-": "Other interests are not important."
+ * }
+ *
+ * This is good enough for most simple use cases.
+ * TODO: Make a formal specification for this format.
+*/
 struct MarkdownLikeParser : public LanguageParser
 {
+    MarkdownLikeParser() = default;
+    MarkdownLikeParser(const std::set<std::string>& altname_for_plaintext) : altname_for_plaintext(altname_for_plaintext) {}
+
     nlohmann::json parseReply(const std::string& reply);
+    std::set<std::string> altname_for_plaintext;
+};
+
+struct JsonParser : public LanguageParser
+{
+    nlohmann::json parseReply(const std::string& reply) override;
+};
+
+struct PlaintextParser : public LanguageParser
+{
+    nlohmann::json parseReply(const std::string& reply) override;
 };
 
 struct PromptTemplate

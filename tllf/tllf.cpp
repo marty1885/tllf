@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <tllf/tllf.hpp>
 
@@ -49,13 +50,13 @@ std::string replaceAll(std::string str, const std::string& from, const std::stri
     return str;
 }
 
-std::string trim(const std::string_view str, const std::string_view whitespace)
+std::string_view trim(const std::string_view str, const std::string_view whitespace)
 {
     size_t first = str.find_first_not_of(whitespace);
     if(std::string::npos == first)
-        return std::string(str);
+        return str;
     size_t last = str.find_last_not_of(whitespace);
-    return std::string(str.substr(first, (last - first + 1)));
+    return str.substr(first, (last - first + 1));
 }
 }
 
@@ -121,7 +122,7 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
 
         std::string line = peek_next_line();
         consume_line();
-        std::string trimmed = utils::trim(line);
+        std::string trimmed = std::string(utils::trim(line));
         if(trimmed.empty()) {
             continue;
         }
@@ -150,10 +151,20 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
                 items.push_back(line.substr(2));
                 consume_line();
             }
+
             std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            if(altname_for_plaintext.contains(key))
+                key = "-";
             parsed[key] = items;
         }
-        else if(trimmed.find(": ") != std::string::npos) {
+        // HACK: There is an ambiguity here. Usually we treat lines with a colon as key-value pairs. ex:
+        // name: Tom
+        // however, there are other cases where a colon is used in a sentence. ex:
+        // The book "The Lord of the Rings: The Fellowship of the Ring" is a good book.
+        // We can't reliably distinguish between these two cases. So a heuristic is used.
+        else if(auto sep_pos = trimmed.find(": "); sep_pos != std::string::npos
+            && trimmed.substr(0, sep_pos).find_first_of("\"'") == std::string::npos
+            && sep_pos < 48) {
             size_t colon_pos = trimmed.find(": ");
             std::string key = trimmed.substr(0, colon_pos);
             std::string value = trimmed.substr(colon_pos + 2);
@@ -170,6 +181,24 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
     }
     
     return parsed;
+}
+nlohmann::json JsonParser::parseReply(const std::string& reply)
+{
+    std::string_view remaining(reply);
+    if(remaining.starts_with("```json"))
+        remaining = remaining.substr(7);
+    if(remaining.starts_with("```"))
+        remaining = remaining.substr(3);
+    if(remaining.ends_with("```"))
+        remaining = remaining.substr(0, remaining.size() - 3);
+    remaining = utils::trim(remaining, " \n\r\t");
+
+    return nlohmann::json::parse(remaining);
+}
+
+nlohmann::json PlaintextParser::parseReply(const std::string& reply)
+{
+    return reply;
 }
 
 std::string PromptTemplate::render() const
