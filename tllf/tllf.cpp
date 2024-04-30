@@ -259,3 +259,24 @@ std::unordered_set<std::string> PromptTemplate::extractVars(const std::string& p
     }
     return prompt_vars;
 }
+
+Task<std::vector<float>> DeepinfraTextEmbedder::embed(std::string text)
+{
+    std::vector<std::string> texts = {std::move(text)};
+    co_return (co_await embed(std::move(texts)))[0];
+}
+
+Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<std::string> texts)
+{
+    HttpRequestPtr req = HttpRequest::newHttpRequest();
+    req->setPath("/v1/inference/" + model_name);
+    req->addHeader("Authorization", "Bearer " + api_key);
+    req->setMethod(HttpMethod::Post);
+    nlohmann::json body;
+    body["inputs"] = texts;
+    req->setBody(body.dump());
+    req->setContentTypeCode(CT_APPLICATION_JSON);
+    auto resp = co_await client->sendRequestCoro(req);
+    auto json = nlohmann::json::parse(resp->body());
+    co_return json["embeddings"].get<std::vector<std::vector<float>>>();
+}

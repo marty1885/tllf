@@ -51,6 +51,33 @@ struct LLM
     virtual drogon::Task<std::string> generate(std::vector<ChatEntry> history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) = 0;
 };
 
+struct TextEmbedder
+{
+    virtual drogon::Task<std::vector<float>> embed(std::string text) = 0;
+    virtual drogon::Task<std::vector<std::vector<float>>> embed(std::vector<std::string> texts)
+    {
+        std::vector<std::vector<float>> res;
+        for(auto& text : texts)
+            res.push_back(co_await embed(text));
+        co_return res;
+    }
+};
+
+struct DeepinfraTextEmbedder : public TextEmbedder
+{
+    DeepinfraTextEmbedder(const std::string& model_name, const std::string& hoststr="https://api.deepinfra.com", const std::string& api_key="")
+        : client(internal::getClient(hoststr)), model_name(model_name), api_key(api_key)
+    {
+    }
+
+    drogon::Task<std::vector<float>> embed(std::string text) override;
+    drogon::Task<std::vector<std::vector<float>>> embed(std::vector<std::string> texts) override;
+
+    drogon::HttpClientPtr client;
+    std::string model_name;
+    std::string api_key;
+};
+
 struct OpenAIConnector : public LLM
 {
     OpenAIConnector(const std::string& model_name, const std::string& hoststr="https://api.openai.com", const std::string& api_key="")

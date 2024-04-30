@@ -10,11 +10,14 @@ Task<> func()
     auto config = tllf::TextGenerationConfig();
     config.temperature = 0;
 
-    tllf::PromptTemplate sysprompt("Your name is {name}, adn you are {character_desc}.");
+    tllf::PromptTemplate sysprompt("Your name is {name}, and you are {character_desc}. {task_desc}");
     sysprompt.setVariable("name", "Lacia");
-    sysprompt.setVariable("character_desc", "a happy, young girl with a lot of energy");
+    sysprompt.setVariable("character_desc", "a happy, young girl with and would help when possible");
+    sysprompt.setVariable("task_desc", "Reply in the following format:\n\nneed_action: <true|false if more action then replying the message is needed>\nreply: <your reply>");
 
-    tllf::PromptTemplate userprompt("What is the distance between earth and the sun?");
+    std::cout << "System Prompt:\n=====\n" << sysprompt.render() << "\n=====\n";
+
+    tllf::PromptTemplate userprompt("What is your name?");
 
     std::vector<tllf::ChatEntry> chatlog = {{sysprompt.render(), "system"}, {userprompt.render(), "user"}};
     auto result = co_await llm->generate(chatlog, config);
