@@ -12,6 +12,7 @@ Task<> func()
     for(auto& val : res)
         std::cout << val << ", ";
     std::cout << "]\n";
+    std::cout << "Embedding size: " << res.size() << "\n";
 
     co_return;
 }

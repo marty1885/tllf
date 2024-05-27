@@ -19,7 +19,7 @@ Task<> func()
 
     tllf::PromptTemplate userprompt("What is your name?");
 
-    std::vector<tllf::ChatEntry> chatlog = {{sysprompt.render(), "system"}, {userprompt.render(), "user"}};
+    tllf::Chatlog chatlog = {{sysprompt.render(), "system"}, {userprompt.render(), "user"}};
     auto result = co_await llm->generate(chatlog, config);
     std::cout << "LLM Generated:\n=====\n" << result << "\n=====\n";
 
