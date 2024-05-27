@@ -1,8 +1,11 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <drogon/CacheMap.h>
 #include <drogon/HttpClient.h>
 #include <drogon/HttpTypes.h>
+#include <initializer_list>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
@@ -46,9 +49,28 @@ struct ChatEntry
     std::string role;
 };
 
+struct Chatlog : public std::vector<ChatEntry>
+{
+    Chatlog() = default;
+    Chatlog(size_t n) : std::vector<ChatEntry>(n){}
+    Chatlog(std::initializer_list<ChatEntry> list)
+        : std::vector<ChatEntry>(list)
+    {}
+    Chatlog operator+ (const Chatlog& rhs)
+    {
+        Chatlog res = *this;
+        res.reserve(size() + rhs.size());
+        for(auto& ent : rhs)
+            res.push_back(ent);
+        return res;
+    }
+};
+
+std::string to_string(const Chatlog& chatlog);
+
 struct LLM
 {
-    virtual drogon::Task<std::string> generate(std::vector<ChatEntry> history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) = 0;
+    virtual drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig(), const nlohmann::json& function = nlohmann::json{}) = 0;
 };
 
 struct TextEmbedder
@@ -85,7 +107,21 @@ struct OpenAIConnector : public LLM
     {
     }
 
-    drogon::Task<std::string> generate(std::vector<ChatEntry> history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) override;
+    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) override;
+
+    drogon::HttpClientPtr client;
+    std::string model_name;
+    std::string api_key;
+};
+
+struct VertexAIConnector : public LLM
+{
+    VertexAIConnector(const std::string& model_name, const std::string& hoststr="https://aiplatform.googleapis.com", const std::string& api_key="")
+        : client(internal::getClient(hoststr)), model_name(model_name), api_key(api_key)
+    {
+    }
+
+    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) override;
 
     drogon::HttpClientPtr client;
     std::string model_name;
@@ -124,6 +160,11 @@ struct MarkdownLikeParser : public LanguageParser
     std::set<std::string> altname_for_plaintext;
 };
 
+struct MarkdownListParser : public LanguageParser
+{
+    nlohmann::json parseReply(const std::string& reply) override;
+};
+
 struct JsonParser : public LanguageParser
 {
     nlohmann::json parseReply(const std::string& reply) override;
@@ -147,6 +188,16 @@ struct PromptTemplate
         variables[name] = value;
     }
 
+    void setVariable(const std::string& name, intmax_t value)
+    {
+        variables[name] = std::to_string(value);
+    }
+
+    void setVariable(const std::string& name, double value)
+    {
+        variables[name] = std::to_string(value);
+    }
+
     std::string prompt;
     std::unordered_map<std::string, std::string> variables;
 
@@ -157,7 +208,7 @@ struct PromptTemplate
 
 struct Chain
 {
-    std::vector<tllf::ChatEntry> chatlog;
+    Chatlog chatlog;
     std::shared_ptr<tllf::LLM> llm;
     std::shared_ptr<tllf::LanguageParser> parser;
     std::shared_ptr<PromptTemplate> prompt;

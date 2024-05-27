@@ -7,6 +7,7 @@
 
 #include <drogon/HttpClient.h>
 #include <drogon/HttpAppFramework.h>
+#include <trantor/utils/Logger.h>
 #include <vector>
 
 using namespace tllf;
@@ -62,7 +63,7 @@ std::string_view trim(const std::string_view str, const std::string_view whitesp
 
 }
 
-drogon::Task<std::string> OpenAIConnector::generate(std::vector<ChatEntry> history, TextGenerationConfig config, const nlohmann::json& function)
+drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function)
 {
     drogon::HttpRequestPtr req = drogon::HttpRequest::newHttpRequest();
     req->setPath("/v1/openai/chat/completions");
@@ -85,12 +86,73 @@ drogon::Task<std::string> OpenAIConnector::generate(std::vector<ChatEntry> histo
         historyJson.push_back(entryJson);
     }
     body["messages"] = historyJson;
+    LOG_DEBUG << "Request: " << body.dump();
     req->setBody(body.dump());
     req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
-    // std::cerr << resp->body() << std::endl;
+    LOG_DEBUG << "Response: " << resp->body();
+    if(resp->statusCode() != drogon::k200OK) {
+        nlohmann::json json = nlohmann::json::parse(resp->body());
+        throw std::runtime_error(json["error"].get<std::string>());
+    }
     auto json = nlohmann::json::parse(resp->body());
-    co_return json["choices"][0]["message"]["content"].get<std::string>();
+    if(json["choices"].size() == 0)
+        throw std::runtime_error("Error: " + json.dump());
+    auto r = json["choices"][0]["message"]["content"].get<std::string>();
+    // HACK: Deepinfra sometimes returns the prompt in the response. This is a workaround.
+    if(r.starts_with("assistant\n\n"))
+        r = r.substr(11);
+    co_return r;
+}
+
+Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function)
+{
+    HttpRequestPtr req = HttpRequest::newHttpRequest();
+    req->setPath("/v1beta/models/" + model_name + ":generateContent");
+    req->setPathEncode(false);
+    req->setParameter("api_key", api_key);
+    req->setMethod(HttpMethod::Post);
+    nlohmann::json body;
+    nlohmann::json contents;
+    for(auto& entry : history) {
+        nlohmann::json entryJson;
+        entryJson["text"] = entry.content;
+        entryJson["role"] = entry.role;
+        contents.push_back(entryJson);
+    }
+    body["contents"] = contents;
+    body["tools"] = function;
+
+    nlohmann::json generation_config;
+    // TOOD: Add more config options
+    if(config.max_tokens.has_value()) generation_config["maxOutputTokens"] = config.max_tokens.value();
+    if(config.temperature.has_value()) generation_config["temperature"] = config.temperature.value();
+    if(config.top_p.has_value()) generation_config["topP"] = config.top_p.value();
+
+    if(generation_config.is_null() == false)
+        body["generationConfig"] = generation_config;
+
+    // Force ignore all safety settings
+    body["safety_settings"] = {
+        {{"category", "HARM_CATEGORY_HARASSMENT"}, {"threshold", "BLOCK_NONE"}},
+        {{"category", "HARM_CATEGORY_DANGEROUS_CONTENT"}, {"threshold", "BLOCK_NONE"}},
+        {{"category", "HARM_CATEGORY_SEXUALLY_EXPLICIT"}, {"threshold", "BLOCK_NONE"}},
+        {{"category", "HARM_CATEGORY_HATE_SPEECH"}, {"threshold", "BLOCK_NONE"}}
+    };
+
+    req->setBody(body.dump());
+    req->setContentTypeCode(CT_APPLICATION_JSON);
+    auto resp = co_await client->sendRequestCoro(req);
+    if(resp->statusCode() != k200OK) {
+        nlohmann::json json = nlohmann::json::parse(resp->body());
+        if(json.contains("error"))
+            throw std::runtime_error(json["error"].get<std::string>());
+        throw std::runtime_error("Unknown error");
+    }
+
+    auto resp_body = nlohmann::json::parse(resp->body());
+    auto res = resp_body.at("candidates").at(0).at("content").at("parts").at(0).at("text").get<std::string>();
+    co_return res;
 }
 
 nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
@@ -182,6 +244,49 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
     
     return parsed;
 }
+
+nlohmann::json MarkdownListParser::parseReply(const std::string& reply)
+{
+    std::string_view remaining(reply);
+    size_t last_remaining_size = -1;
+
+    auto peek_next_line = [&](){
+        size_t next_line_end = remaining.find('\n');
+        if(next_line_end == std::string::npos)
+            return std::string(remaining);
+        return std::string(remaining.substr(0, next_line_end));
+    };
+
+    auto consume_line = [&](){
+        size_t next_line_end = remaining.find('\n');
+        if(next_line_end == std::string::npos) {
+            remaining = std::string_view();
+            return;
+        }
+        remaining = remaining.substr(next_line_end + 1);
+    };
+
+    std::vector<std::string> res;
+    while(remaining.size() > 0) {
+        if(remaining.size() == last_remaining_size)
+            throw std::runtime_error("Parser stuck in infinite loop. THIS IS A BUG.");
+        last_remaining_size = remaining.size();
+
+        std::string line = peek_next_line();
+        consume_line();
+        std::string_view trimmed = utils::trim(line);
+        if(trimmed.empty()) {
+            continue;
+        }
+
+        if(trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ")) {
+            res.push_back(std::string(trimmed.substr(2)));
+        }
+    }
+
+    return res;
+}
+
 nlohmann::json JsonParser::parseReply(const std::string& reply)
 {
     std::string_view remaining(reply);
@@ -277,6 +382,21 @@ Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<s
     req->setBody(body.dump());
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
+    if(resp->statusCode() != k200OK) {
+        nlohmann::json json = nlohmann::json::parse(resp->body());
+        if(json.contains("error"))
+            throw std::runtime_error(json["error"].get<std::string>());
+        throw std::runtime_error("Unknown error");
+    }
     auto json = nlohmann::json::parse(resp->body());
     co_return json["embeddings"].get<std::vector<std::vector<float>>>();
+}
+
+std::string tllf::to_string(const Chatlog& chatlog)
+{
+    std::string res;
+    for(auto& entry : chatlog) {
+        res += entry.role + ": " + entry.content + "\n";
+    }
+    return res;
 }
