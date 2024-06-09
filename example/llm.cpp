@@ -1,4 +1,5 @@
 #include <drogon/utils/coroutine.h>
+#include <glaze/core/opts.hpp>
 #include <tllf/tllf.hpp>
 #include <drogon/HttpAppFramework.h>
 
@@ -6,7 +7,7 @@ using namespace drogon;
 
 Task<> func()
 {
-    auto llm = std::make_shared<tllf::OpenAIConnector>("meta-llama/Meta-Llama-3-8B-Instruct", "https://api.deepinfra.com", tllf::internal::env("DEEPINFRA_API_KEY"));
+    auto llm = std::make_shared<tllf::OpenAIConnector>("meta-llama/Meta-Llama-3-8B-Instruct", "https://api.deepinfra.com", tllf::internal::env("DEEPINFRA_API_KEY"), "/v1/openai");
     auto config = tllf::TextGenerationConfig();
     config.temperature = 0;
 
@@ -25,7 +26,7 @@ Task<> func()
 
     tllf::PlaintextParser parser;
     auto parsed = parser.parseReply(result);
-    std::cout << "Parsed:\n=====\n" << parsed.dump(4) << "\n=====\n";
+    std::cout << "Parsed:\n=====\n" << glz::write<glz::opts{.indentation_width=4}>(parsed) << "\n=====\n";
 
     co_return;
 }

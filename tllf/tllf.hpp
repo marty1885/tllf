@@ -7,13 +7,12 @@
 #include <drogon/HttpTypes.h>
 #include <initializer_list>
 #include <memory>
-#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <trantor/net/EventLoop.h>
 #include <unordered_map>
-#include <nlohmann/json.hpp>
+#include <glaze/glaze.hpp>
 #include <vector>
 #include <unordered_set>
 
@@ -70,7 +69,7 @@ std::string to_string(const Chatlog& chatlog);
 
 struct LLM
 {
-    virtual drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig(), const nlohmann::json& function = nlohmann::json{}) = 0;
+    virtual drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig()) = 0;
 };
 
 struct TextEmbedder
@@ -107,7 +106,7 @@ struct OpenAIConnector : public LLM
     {
     }
 
-    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) override;
+    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config) override;
 
     drogon::HttpClientPtr client;
     std::string base;
@@ -122,7 +121,7 @@ struct VertexAIConnector : public LLM
     {
     }
 
-    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) override;
+    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config) override;
 
     drogon::HttpClientPtr client;
     std::string model_name;
@@ -131,7 +130,7 @@ struct VertexAIConnector : public LLM
 
 struct LanguageParser
 {
-    virtual nlohmann::json parseReply(const std::string& reply) = 0;
+    virtual glz::json_t parseReply(const std::string& reply) = 0;
 };
 
 /**
@@ -157,23 +156,23 @@ struct MarkdownLikeParser : public LanguageParser
     MarkdownLikeParser() = default;
     MarkdownLikeParser(const std::set<std::string>& altname_for_plaintext) : altname_for_plaintext(altname_for_plaintext) {}
 
-    nlohmann::json parseReply(const std::string& reply);
+    glz::json_t parseReply(const std::string& reply);
     std::set<std::string> altname_for_plaintext;
 };
 
 struct MarkdownListParser : public LanguageParser
 {
-    nlohmann::json parseReply(const std::string& reply) override;
+    glz::json_t parseReply(const std::string& reply) override;
 };
 
 struct JsonParser : public LanguageParser
 {
-    nlohmann::json parseReply(const std::string& reply) override;
+    glz::json_t parseReply(const std::string& reply) override;
 };
 
 struct PlaintextParser : public LanguageParser
 {
-    nlohmann::json parseReply(const std::string& reply) override;
+    glz::json_t parseReply(const std::string& reply) override;
 };
 
 struct PromptTemplate

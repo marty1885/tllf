@@ -1,5 +1,8 @@
 #include <algorithm>
 #include <cstddef>
+#include <glaze/json/json_t.hpp>
+#include <glaze/json/read.hpp>
+#include <glaze/json/write.hpp>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -63,7 +66,20 @@ std::string_view trim(const std::string_view str, const std::string_view whitesp
 
 }
 
-drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function)
+struct OpenAIDataBody
+{
+    std::string model;
+    std::vector<ChatEntry> messages;
+    std::optional<int> max_tokens;
+    std::optional<int> temperature;
+    std::optional<int> top_p;
+    std::optional<int> frequency_penalty;
+    std::optional<int> presence_penalty;
+    std::optional<int> stop_sequence;
+
+};
+
+drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerationConfig config)
 {
     drogon::HttpRequestPtr req = drogon::HttpRequest::newHttpRequest();
     auto p = std::filesystem::path(base) / "chat/completions";
@@ -72,42 +88,42 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     req->addHeader("Authorization", "Bearer " + api_key);
     req->addHeader("Accept", "application/json");
     req->setMethod(drogon::HttpMethod::Post);
-    nlohmann::json body;
-    body["model"] = model_name;
-    if(config.max_tokens.has_value()) body["max_tokens"] = config.max_tokens.value();
-    if(config.temperature.has_value()) body["temperature"] = config.temperature.value();
-    if(config.top_p.has_value()) body["top_p"] = config.top_p.value();
-    if(config.frequency_penalty.has_value()) body["frequency_penalty"] = config.frequency_penalty.value();
-    if(config.presence_penalty.has_value()) body["presence_penalty"] = config.presence_penalty.value();
-    if(config.stop_sequence.has_value()) body["stop_sequence"] = config.stop_sequence.value();
-    if(!function.is_null()) body["functions"] = function;
-    nlohmann::json historyJson;
-    for(auto& entry : history) {
-        nlohmann::json entryJson;
-        entryJson["content"] = entry.content;
-        entryJson["role"] = entry.role;
-        historyJson.push_back(entryJson);
-    }
-    body["messages"] = historyJson;
-    LOG_DEBUG << "Request: " << body.dump();
-    req->setBody(body.dump());
+
+    OpenAIDataBody body {
+        .model = model_name,
+        .messages = history,
+        .max_tokens = config.max_tokens,
+        .temperature = config.temperature,
+        .top_p = config.top_p,
+        .frequency_penalty = config.frequency_penalty,
+        .presence_penalty = config.presence_penalty,
+        .stop_sequence = config.stop_sequence
+    };
+
+    std::string body_str = glz::write_json(body);
+    LOG_DEBUG << "Request: " << body_str;
+    req->setBody(body_str);
     req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != drogon::k200OK) {
-        try {
-            nlohmann::json json = nlohmann::json::parse(resp->body());
-            if(json.contains("error"))
-                throw std::runtime_error(json["error"].get<std::string>());
-            throw std::runtime_error("API error: " + json.dump());
+        glz::json_t json;
+        auto error = glz::read_json(json, resp->body());
+        if(error) {
+            throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
         }
-        catch(const std::exception& e) {
-            throw std::runtime_error("Unknown error. status code: " + std::to_string(resp->statusCode()));
-        }
+        if(json.contains("error"))
+            throw std::runtime_error(json["error"].get<std::string>());
+        throw std::runtime_error("Unknown error. status code: " + std::to_string(resp->statusCode()));
     }
-    auto json = nlohmann::json::parse(resp->body());
-    if(json["choices"].size() == 0)
-        throw std::runtime_error("Error: " + json.dump());
+    
+    glz::json_t json;
+    auto error = glz::read_json(json, resp->body());
+    if(error)
+        throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
+
+    if(json.contains("choices") == false)
+        throw std::runtime_error("Error: " + std::string(resp->body()));
     auto r = json["choices"][0]["message"]["content"].get<std::string>();
     // HACK: Deepinfra sometimes returns the prompt in the response. This is a workaround.
     if(r.starts_with("assistant\n\n"))
@@ -115,74 +131,97 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     co_return r;
 }
 
-Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function)
+struct VertexGenerationConfig
+{
+    std::optional<int> maxOutputTokens;
+    std::optional<float> temperature;
+    std::optional<float> topP;
+};
+
+struct VertexDataBody
+{
+    VertexGenerationConfig generationConfig;
+    tllf::Chatlog contents;
+    std::vector<std::map<std::string, std::string>> safety_settings;
+};
+
+Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationConfig config)
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
     req->setPath("/v1beta/models/" + model_name + ":generateContent");
-    // /v1beta/models/gemini-1.5-flash:generateContent
     req->setPathEncode(false);
     req->setParameter("key", api_key);
     req->setMethod(HttpMethod::Post);
-    nlohmann::json body;
-    nlohmann::json contents;
+
+    VertexDataBody body;
+
+    Chatlog log;
 
     // Gemini does not have a "system" role. So we need to merge the system messages into the user messages.
     std::string buffered_sys_message;
 
     for(auto& entry : history) {
-        if(entry.role == "system" && buffered_sys_message.empty()) {
+        if(entry.role == "system") {
             buffered_sys_message += entry.content + "\n";
-            continue;
         }
-        else if(entry.role == "system" && buffered_sys_message.empty() == false) {
-            throw std::runtime_error("Multiple system messages");
+        else {
+            if(!buffered_sys_message.empty()) {
+                log.push_back({"system", buffered_sys_message});
+                buffered_sys_message.clear();
+            }
+            log.push_back(entry);
         }
-
-        nlohmann::json entryJson;
-        entryJson["role"] = entry.role;
-        entryJson["parts"]["text"] = buffered_sys_message + "\n" + entry.content;
-        buffered_sys_message.clear();
-        contents.push_back(entryJson);
     }
-    body["contents"] = contents;
-    body["tools"] = function;
+    body.contents = log;
 
-    nlohmann::json generation_config;
     // TOOD: Add more config options
-    if(config.max_tokens.has_value()) generation_config["maxOutputTokens"] = config.max_tokens.value();
-    if(config.temperature.has_value()) generation_config["temperature"] = config.temperature.value();
-    if(config.top_p.has_value()) generation_config["topP"] = config.top_p.value();
-
-    if(generation_config.is_null() == false)
-        body["generationConfig"] = generation_config;
+    if(config.max_tokens.has_value()) body.generationConfig.maxOutputTokens = config.max_tokens.value();
+    if(config.temperature.has_value()) body.generationConfig.temperature = config.temperature.value();
+    if(config.top_p.has_value()) body.generationConfig.topP = config.top_p.value();
 
     // Force ignore all safety settings
-    body["safety_settings"] = {
+    body.safety_settings = {
         {{"category", "HARM_CATEGORY_HARASSMENT"}, {"threshold", "BLOCK_NONE"}},
         {{"category", "HARM_CATEGORY_DANGEROUS_CONTENT"}, {"threshold", "BLOCK_NONE"}},
         {{"category", "HARM_CATEGORY_SEXUALLY_EXPLICIT"}, {"threshold", "BLOCK_NONE"}},
         {{"category", "HARM_CATEGORY_HATE_SPEECH"}, {"threshold", "BLOCK_NONE"}}
     };
 
-    req->setBody(body.dump());
+    std::string body_str = glz::write_json(body);
+    req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != k200OK) {
-        nlohmann::json json = nlohmann::json::parse(resp->body());
+        glz::json_t json;
+        auto error = glz::read_json(json, resp->body());
+        if(error) {
+            throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
+        }
         if(json.contains("error"))
             throw std::runtime_error(json["error"]["message"].get<std::string>());
-        throw std::runtime_error("Unknown error");
+        throw std::runtime_error("Unknown error. status code: " + std::to_string(resp->statusCode()));
     }
 
-    auto resp_body = nlohmann::json::parse(resp->body());
-    auto res = resp_body.at("candidates").at(0).at("content").at("parts").at(0).at("text").get<std::string>();
-    co_return res;
+    glz::json_t json;
+    auto error = glz::read_json(json, resp->body());
+    if(error)
+        throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
+
+    co_return json["candidate"][0]["content"]["parts"][0]["text"].get<std::string>();
 }
 
-nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
+glz::json_t to_json(const std::vector<std::string> vec)
 {
-    nlohmann::json parsed;
+    glz::json_t::array_t res;
+    for(auto& str : vec)
+        res.push_back(str);
+    return res;
+}
+
+glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
+{
+    glz::json_t parsed;
     std::string_view remaining(reply);
     size_t last_remaining_size = -1;
 
@@ -242,7 +281,7 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
             std::transform(key.begin(), key.end(), key.begin(), ::tolower);
             if(altname_for_plaintext.contains(key))
                 key = "-";
-            parsed[key] = items;
+            parsed[key] = to_json(items);
         }
         // HACK: There is an ambiguity here. Usually we treat lines with a colon as key-value pairs. ex:
         // name: Tom
@@ -259,18 +298,17 @@ nlohmann::json MarkdownLikeParser::parseReply(const std::string& reply)
             parsed[key] = value;
         }
         else {
-            auto it = parsed.find("-");
-            if(it == parsed.end())
+            if(!parsed.contains("-"))
                 parsed["-"] = trimmed;
             else
-                parsed["-"] = it->get<std::string>() + "\n" + trimmed;
+                parsed["-"] = parsed["-"].get<std::string>() + "\n" + trimmed;
         }
     }
     
     return parsed;
 }
 
-nlohmann::json MarkdownListParser::parseReply(const std::string& reply)
+glz::json_t MarkdownListParser::parseReply(const std::string& reply)
 {
     std::string_view remaining(reply);
     size_t last_remaining_size = -1;
@@ -309,10 +347,10 @@ nlohmann::json MarkdownListParser::parseReply(const std::string& reply)
         }
     }
 
-    return res;
+    return to_json(res);
 }
 
-nlohmann::json JsonParser::parseReply(const std::string& reply)
+glz::json_t JsonParser::parseReply(const std::string& reply)
 {
     std::string_view remaining(reply);
     if(remaining.starts_with("```json"))
@@ -323,10 +361,14 @@ nlohmann::json JsonParser::parseReply(const std::string& reply)
         remaining = remaining.substr(0, remaining.size() - 3);
     remaining = utils::trim(remaining, " \n\r\t");
 
-    return nlohmann::json::parse(remaining);
+    glz::json_t parsed;
+    auto err = glz::read_json(parsed, remaining);
+    if(err)
+        throw std::runtime_error("Error parsing JSON: " + std::string(err.includer_error));
+    return parsed;
 }
 
-nlohmann::json PlaintextParser::parseReply(const std::string& reply)
+glz::json_t PlaintextParser::parseReply(const std::string& reply)
 {
     return reply;
 }
@@ -396,25 +438,55 @@ Task<std::vector<float>> DeepinfraTextEmbedder::embed(std::string text)
     co_return (co_await embed(std::move(texts)))[0];
 }
 
+struct DeepinfraEmbedDataBody
+{
+    std::vector<std::string> inputs;
+};
+
+struct DeepinfraEmbedResponse
+{
+    std::vector<std::vector<float>> embeddings;
+};
+
+struct DeepinfraEmbedError
+{
+    std::string error;
+};
+
+template <>
+struct glz::meta<DeepinfraEmbedResponse> {
+  static constexpr auto value = object("request_id", skip{},
+    "inference_status", skip{},
+    "input_tokens", skip{},
+    &DeepinfraEmbedResponse::embeddings);
+};
+
 Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<std::string> texts)
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
     req->setPath("/v1/inference/" + model_name);
     req->addHeader("Authorization", "Bearer " + api_key);
     req->setMethod(HttpMethod::Post);
-    nlohmann::json body;
-    body["inputs"] = texts;
-    req->setBody(body.dump());
+    DeepinfraEmbedDataBody body;
+    body.inputs = std::move(texts);
+    auto body_str = glz::write_json(body);
+    req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
     if(resp->statusCode() != k200OK) {
-        nlohmann::json json = nlohmann::json::parse(resp->body());
-        if(json.contains("error"))
-            throw std::runtime_error(json["error"].get<std::string>());
-        throw std::runtime_error("Unknown error");
+        DeepinfraEmbedError error;
+        auto err = glz::read_json(error, resp->body());
+        if(err)
+            throw std::runtime_error("Error parsing response");
+        throw std::runtime_error(error.error);
     }
-    auto json = nlohmann::json::parse(resp->body());
-    co_return json["embeddings"].get<std::vector<std::vector<float>>>();
+
+    DeepinfraEmbedResponse response;
+    auto error = glz::read_json(response, resp->body());
+    std::cout << "Response: " << resp->body() << std::endl;
+    if(error)
+        throw std::runtime_error("Error parsing response");
+    co_return response.embeddings;
 }
 
 std::string tllf::to_string(const Chatlog& chatlog)
