@@ -117,7 +117,7 @@ struct OpenAIConnector : public LLM
 
 struct VertexAIConnector : public LLM
 {
-    VertexAIConnector(const std::string& model_name, const std::string& hoststr="https://aiplatform.googleapis.com", const std::string& api_key="")
+    VertexAIConnector(const std::string& model_name, const std::string& hoststr="https://generativelanguage.googleapis.com/", const std::string& api_key="")
         : client(internal::getClient(hoststr)), model_name(model_name), api_key(api_key)
     {
     }
