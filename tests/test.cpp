@@ -73,7 +73,7 @@ DROGON_TEST(JsonParser)
     auto parsed = parser.parseReply(reply);
     REQUIRE(parsed.contains("distance"));
     REQUIRE(parsed.contains("explanation"));
-    REQUIRE(parsed["distance"].get<std::string>() == "11971");
+    REQUIRE(parsed["distance"].get<double>() == 11971);
     REQUIRE(parsed["explanation"].get<std::string>() == "The distance between Taipei and New York is approximately 11,971 kilometers (7,454 miles). This distance is calculated as the straight-line distance between the two cities, and does not take into account the actual travel time or route taken.");
 
 
