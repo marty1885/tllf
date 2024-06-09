@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <tllf/tllf.hpp>
+#include <tllf/url_parser.hpp>
 
 #include <drogon/HttpClient.h>
 #include <drogon/HttpAppFramework.h>
@@ -78,6 +79,17 @@ struct OpenAIDataBody
     std::optional<int> stop_sequence;
 
 };
+
+OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::string& hoststr, const std::string& api_key)
+{
+    Url url(hoststr);
+    if(!url.validate())
+        throw std::runtime_error("Invalid URL: " + hoststr);
+    this->model_name = model_name;
+    this->api_key = api_key;
+    this->base = url.path();
+    client = internal::getClient(url.withFragment("").withParam("").str(), drogon::app().getLoop());
+}
 
 drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerationConfig config)
 {

@@ -7,7 +7,7 @@ using namespace drogon;
 
 Task<> func()
 {
-    auto llm = std::make_shared<tllf::OpenAIConnector>("meta-llama/Meta-Llama-3-8B-Instruct", "https://api.deepinfra.com", tllf::internal::env("DEEPINFRA_API_KEY"), "/v1/openai");
+    auto llm = std::make_shared<tllf::OpenAIConnector>("meta-llama/Meta-Llama-3-8B-Instruct", "https://api.deepinfra.com/v1/openai", tllf::internal::env("DEEPINFRA_API_KEY"));
     auto config = tllf::TextGenerationConfig();
     config.temperature = 0;
 

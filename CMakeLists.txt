@@ -14,6 +14,7 @@ target_include_directories(tllf PUBLIC .)
 target_precompile_headers(tllf PRIVATE tllf/pch.hpp)
 target_sources(tllf PRIVATE
     tllf/tllf.cpp
+    tllf/url_parser.cpp
 )
 target_link_libraries(tllf PRIVATE Drogon::Drogon)
 
