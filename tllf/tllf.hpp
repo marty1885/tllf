@@ -102,14 +102,15 @@ struct DeepinfraTextEmbedder : public TextEmbedder
 
 struct OpenAIConnector : public LLM
 {
-    OpenAIConnector(const std::string& model_name, const std::string& hoststr="https://api.openai.com", const std::string& api_key="")
-        : client(internal::getClient(hoststr)), model_name(model_name), api_key(api_key)
+    OpenAIConnector(const std::string& model_name, const std::string& hoststr="https://api.openai.com", const std::string& api_key="", std::string base="/")
+        : client(internal::getClient(hoststr)), model_name(model_name), api_key(api_key), base(base)
     {
     }
 
     drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function = nlohmann::json{}) override;
 
     drogon::HttpClientPtr client;
+    std::string base;
     std::string model_name;
     std::string api_key;
 };
