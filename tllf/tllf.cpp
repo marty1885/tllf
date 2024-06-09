@@ -66,8 +66,11 @@ std::string_view trim(const std::string_view str, const std::string_view whitesp
 drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerationConfig config, const nlohmann::json& function)
 {
     drogon::HttpRequestPtr req = drogon::HttpRequest::newHttpRequest();
-    req->setPath("/v1/openai/chat/completions");
+    auto p = std::filesystem::path(base) / "chat/completions";
+
+    req->setPath(p.lexically_normal().string());
     req->addHeader("Authorization", "Bearer " + api_key);
+    req->addHeader("Accept", "application/json");
     req->setMethod(drogon::HttpMethod::Post);
     nlohmann::json body;
     body["model"] = model_name;
@@ -92,8 +95,15 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != drogon::k200OK) {
-        nlohmann::json json = nlohmann::json::parse(resp->body());
-        throw std::runtime_error(json["error"].get<std::string>());
+        try {
+            nlohmann::json json = nlohmann::json::parse(resp->body());
+            if(json.contains("error"))
+                throw std::runtime_error(json["error"].get<std::string>());
+            throw std::runtime_error("API error: " + json.dump());
+        }
+        catch(const std::exception& e) {
+            throw std::runtime_error("Unknown error. status code: " + std::to_string(resp->statusCode()));
+        }
     }
     auto json = nlohmann::json::parse(resp->body());
     if(json["choices"].size() == 0)
@@ -109,15 +119,29 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
     req->setPath("/v1beta/models/" + model_name + ":generateContent");
+    // /v1beta/models/gemini-1.5-flash:generateContent
     req->setPathEncode(false);
-    req->setParameter("api_key", api_key);
+    req->setParameter("key", api_key);
     req->setMethod(HttpMethod::Post);
     nlohmann::json body;
     nlohmann::json contents;
+
+    // Gemini does not have a "system" role. So we need to merge the system messages into the user messages.
+    std::string buffered_sys_message;
+
     for(auto& entry : history) {
+        if(entry.role == "system" && buffered_sys_message.empty()) {
+            buffered_sys_message += entry.content + "\n";
+            continue;
+        }
+        else if(entry.role == "system" && buffered_sys_message.empty() == false) {
+            throw std::runtime_error("Multiple system messages");
+        }
+
         nlohmann::json entryJson;
-        entryJson["text"] = entry.content;
         entryJson["role"] = entry.role;
+        entryJson["parts"]["text"] = buffered_sys_message + "\n" + entry.content;
+        buffered_sys_message.clear();
         contents.push_back(entryJson);
     }
     body["contents"] = contents;
@@ -143,10 +167,11 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
     req->setBody(body.dump());
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
+    LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != k200OK) {
         nlohmann::json json = nlohmann::json::parse(resp->body());
         if(json.contains("error"))
-            throw std::runtime_error(json["error"].get<std::string>());
+            throw std::runtime_error(json["error"]["message"].get<std::string>());
         throw std::runtime_error("Unknown error");
     }
 
