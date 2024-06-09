@@ -506,14 +506,6 @@ struct DeepinfraEmbedError
     std::string error;
 };
 
-template <>
-struct glz::meta<DeepinfraEmbedResponse> {
-  static constexpr auto value = object("request_id", skip{},
-    "inference_status", skip{},
-    "input_tokens", skip{},
-    &DeepinfraEmbedResponse::embeddings);
-};
-
 Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<std::string> texts)
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
@@ -535,7 +527,7 @@ Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<s
     }
 
     DeepinfraEmbedResponse response;
-    auto error = glz::read_json(response, resp->body());
+    auto error = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
     std::cout << "Response: " << resp->body() << std::endl;
     if(error)
         throw std::runtime_error("Error parsing response");
