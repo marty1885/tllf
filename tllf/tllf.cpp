@@ -80,6 +80,24 @@ struct OpenAIDataBody
 
 };
 
+struct OpenAIResponse
+{
+    struct Choice
+    {
+        struct Message
+        {
+            std::string content;
+        };
+        Message message;
+    };
+    std::vector<Choice> choices;
+};
+
+struct OpenAIError
+{
+    std::string error;
+};
+
 OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::string& hoststr, const std::string& api_key)
 {
     Url url(hoststr);
@@ -119,24 +137,21 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != drogon::k200OK) {
-        glz::json_t json;
-        auto error = glz::read_json(json, resp->body());
-        if(error) {
-            throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
-        }
-        if(json.contains("error"))
-            throw std::runtime_error(json["error"].get<std::string>());
-        throw std::runtime_error("Unknown error. status code: " + std::to_string(resp->statusCode()));
+        OpenAIError error;
+        auto err = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
+        if(err || error.error.empty())
+            throw std::runtime_error("Request failed. status code: " + std::to_string(resp->statusCode()));
+        throw std::runtime_error(error.error);
     }
-    
-    glz::json_t json;
-    auto error = glz::read_json(json, resp->body());
+
+    OpenAIResponse response;
+    LOG_DEBUG << "Response: " << resp->body();
+    auto error = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
     if(error)
         throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
-
-    if(json.contains("choices") == false)
-        throw std::runtime_error("Error: " + std::string(resp->body()));
-    auto r = json["choices"][0]["message"]["content"].get<std::string>();
+    if(response.choices.size() == 0)
+        throw std::runtime_error("Server response does not contain any choices");
+    auto r = response.choices[0].message.content;
     // HACK: Deepinfra sometimes returns the prompt in the response. This is a workaround.
     if(r.starts_with("assistant\n\n"))
         r = r.substr(11);
@@ -155,6 +170,32 @@ struct VertexDataBody
     VertexGenerationConfig generationConfig;
     tllf::Chatlog contents;
     std::vector<std::map<std::string, std::string>> safety_settings;
+};
+
+struct VertexResponse
+{
+    struct Candidate
+    {
+        struct Content
+        {
+            struct Part
+            {
+                std::string text;
+            };
+            std::vector<Part> parts;
+        };
+        Content content;
+    };
+    std::vector<Candidate> candidate;
+};
+
+struct VertexError
+{
+    struct Error
+    {
+        std::string message;
+    };
+    Error error;
 };
 
 Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationConfig config)
@@ -205,22 +246,22 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != k200OK) {
-        glz::json_t json;
-        auto error = glz::read_json(json, resp->body());
-        if(error) {
-            throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
-        }
-        if(json.contains("error"))
-            throw std::runtime_error(json["error"]["message"].get<std::string>());
-        throw std::runtime_error("Unknown error. status code: " + std::to_string(resp->statusCode()));
+        VertexError error;
+        auto err = glz::read_json(error, resp->body());
+        if(err)
+            throw std::runtime_error("Request failed. status code: " + std::to_string(resp->statusCode()));
+        throw std::runtime_error(error.error.message);
     }
 
-    glz::json_t json;
-    auto error = glz::read_json(json, resp->body());
+    VertexResponse response;
+    auto error = glz::read_json(response, resp->body());
     if(error)
         throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
-
-    co_return json["candidate"][0]["content"]["parts"][0]["text"].get<std::string>();
+    if(response.candidate.size() == 0)
+        throw std::runtime_error("Server response does not contain any candidates");
+    if(response.candidate[0].content.parts.size() == 0)
+        throw std::runtime_error("Server response does not contain any content parts");
+    co_return response.candidate[0].content.parts[0].text;
 }
 
 glz::json_t to_json(const std::vector<std::string> vec)
