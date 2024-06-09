@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstddef>
+#include <glaze/core/opts.hpp>
 #include <glaze/json/json_t.hpp>
 #include <glaze/json/read.hpp>
 #include <glaze/json/write.hpp>
@@ -16,6 +17,8 @@
 
 using namespace tllf;
 using namespace drogon;
+
+static constexpr glz::opts laxed_opt = {.error_on_unknown_keys=false}; 
 
 namespace tllf
 {
@@ -138,7 +141,7 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != drogon::k200OK) {
         OpenAIError error;
-        auto err = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
+        auto err = glz::read<laxed_opt>(error, resp->body());
         if(err || error.error.empty())
             throw std::runtime_error("Request failed. status code: " + std::to_string(resp->statusCode()));
         throw std::runtime_error(error.error);
@@ -146,7 +149,7 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
 
     OpenAIResponse response;
     LOG_DEBUG << "Response: " << resp->body();
-    auto error = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
+    auto error = glz::read<laxed_opt>(response, resp->body());
     if(error)
         throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
     if(response.choices.size() == 0)
@@ -527,8 +530,7 @@ Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<s
     }
 
     DeepinfraEmbedResponse response;
-    auto error = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
-    std::cout << "Response: " << resp->body() << std::endl;
+    auto error = glz::read<laxed_opt>(response, resp->body());
     if(error)
         throw std::runtime_error("Error parsing response");
     co_return response.embeddings;
