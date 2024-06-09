@@ -161,35 +161,31 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     co_return r;
 }
 
-struct VertexGenerationConfig
+struct VertexPart
 {
-    std::optional<int> maxOutputTokens;
-    std::optional<float> temperature;
-    std::optional<float> topP;
+    std::string text;
+};
+
+struct VertexContent
+{
+    std::string role;
+    std::vector<VertexPart> parts;
 };
 
 struct VertexDataBody
 {
-    VertexGenerationConfig generationConfig;
-    tllf::Chatlog contents;
+    std::vector<VertexContent> contents;
     std::vector<std::map<std::string, std::string>> safety_settings;
+    std::map<std::string, double> generationConfig; // HACK: Workaround Glaze bug. This should be a struct.
 };
 
 struct VertexResponse
 {
     struct Candidate
     {
-        struct Content
-        {
-            struct Part
-            {
-                std::string text;
-            };
-            std::vector<Part> parts;
-        };
-        Content content;
+        VertexContent content;
     };
-    std::vector<Candidate> candidate;
+    std::vector<Candidate> candidates;
 };
 
 struct VertexError
@@ -211,7 +207,7 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
 
     VertexDataBody body;
 
-    Chatlog log;
+    std::vector<VertexContent> log;
 
     // Gemini does not have a "system" role. So we need to merge the system messages into the user messages.
     std::string buffered_sys_message;
@@ -222,18 +218,25 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
         }
         else {
             if(!buffered_sys_message.empty()) {
-                log.push_back({"system", buffered_sys_message});
+                VertexContent content;
+                content.role = "user";
+                content.parts.push_back({buffered_sys_message});
+                log.push_back(content);
                 buffered_sys_message.clear();
+                continue;
             }
-            log.push_back(entry);
+            VertexContent content;
+            content.role = entry.role;
+            content.parts.push_back({entry.content});
+            log.push_back(content);
         }
     }
-    body.contents = log;
+    body.contents = std::move(log);
 
     // TOOD: Add more config options
-    if(config.max_tokens.has_value()) body.generationConfig.maxOutputTokens = config.max_tokens.value();
-    if(config.temperature.has_value()) body.generationConfig.temperature = config.temperature.value();
-    if(config.top_p.has_value()) body.generationConfig.topP = config.top_p.value();
+    if(config.max_tokens.has_value()) body.generationConfig["maxOutputTokens"] = config.max_tokens.value();
+    if(config.temperature.has_value()) body.generationConfig["temperature"] = config.temperature.value();
+    if(config.top_p.has_value()) body.generationConfig["topP"] = config.top_p.value();
 
     // Force ignore all safety settings
     body.safety_settings = {
@@ -244,27 +247,28 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
     };
 
     std::string body_str = glz::write_json(body);
+    LOG_DEBUG << "Request: " << body_str;
     req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != k200OK) {
         VertexError error;
-        auto err = glz::read_json(error, resp->body());
+        auto err = glz::read<laxed_opt>(error, resp->body());
         if(err)
             throw std::runtime_error("Request failed. status code: " + std::to_string(resp->statusCode()));
         throw std::runtime_error(error.error.message);
     }
 
     VertexResponse response;
-    auto error = glz::read_json(response, resp->body());
+    auto error = glz::read<laxed_opt>(response, resp->body());
     if(error)
         throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
-    if(response.candidate.size() == 0)
+    if(response.candidates.size() == 0)
         throw std::runtime_error("Server response does not contain any candidates");
-    if(response.candidate[0].content.parts.size() == 0)
+    if(response.candidates[0].content.parts.size() == 0)
         throw std::runtime_error("Server response does not contain any content parts");
-    co_return response.candidate[0].content.parts[0].text;
+    co_return response.candidates[0].content.parts[0].text;
 }
 
 glz::json_t to_json(const std::vector<std::string> vec)
