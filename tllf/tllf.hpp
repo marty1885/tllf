@@ -99,9 +99,16 @@ struct DeepinfraTextEmbedder : public TextEmbedder
     std::string api_key;
 };
 
+/**
+ * Connector for OpenAI-like API endpoints.
+ *
+ * @param model_name The name of the model to use. For example, "text-davinci-003".
+ * @param hoststr The host string. Defaults to "https://api.openai.com/".
+ * @param api_key The API key to use
+*/
 struct OpenAIConnector : public LLM
 {
-    OpenAIConnector(const std::string& model_name, const std::string& hoststr="https://api.openai.com/", const std::string& api_key="");
+    OpenAIConnector(const std::string& model_name, const std::string& baseurl="https://api.openai.com/", const std::string& api_key="");
 
     drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config) override;
 
@@ -111,6 +118,13 @@ struct OpenAIConnector : public LLM
     std::string api_key;
 };
 
+/**
+ * Connector for Vertex AI (ie. Google Gemini) API endpoints.
+ *
+ * @param model_name The name of the model to use. For example, "gemini-1.5-flash".
+ * @param hoststr The host string. Defaults to "https://generativelanguage.googleapis.com/".
+ * @param api_key The API key to use
+*/
 struct VertexAIConnector : public LLM
 {
     VertexAIConnector(const std::string& model_name, const std::string& hoststr="https://generativelanguage.googleapis.com/", const std::string& api_key="")
@@ -136,7 +150,7 @@ struct LanguageParser
  * interest:
  * - music
  * - sports
- * 
+ *
  * Other interests are not important.
  *
  * Will be parsed as:

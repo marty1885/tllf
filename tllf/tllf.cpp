@@ -148,7 +148,6 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     }
 
     OpenAIResponse response;
-    LOG_DEBUG << "Response: " << resp->body();
     auto error = glz::read<laxed_opt>(response, resp->body());
     if(error)
         throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
@@ -221,6 +220,7 @@ Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationCon
                 VertexContent content;
                 content.role = "user";
                 content.parts.push_back({buffered_sys_message});
+                content.parts.push_back({entry.content});
                 log.push_back(content);
                 buffered_sys_message.clear();
                 continue;
