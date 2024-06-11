@@ -105,13 +105,12 @@ struct OpenAIError
 };
 
 OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::string& hoststr, const std::string& api_key)
+    : model_name(model_name), api_key(api_key)
 {
     Url url(hoststr);
     if(!url.validate())
         throw std::runtime_error("Invalid URL: " + hoststr);
-    this->model_name = model_name;
-    this->api_key = api_key;
-    this->base = url.path();
+    base = url.path();
     client = internal::getClient(url.withFragment("").withParam("").str(), drogon::app().getLoop());
 }
 
@@ -142,6 +141,7 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
             co_await drogon::sleepCoro(trantor::EventLoop::getEventLoopOfCurrentThread(), retry_delay);
         }
     }
+    throw std::runtime_error("Request failed. Retried " + std::to_string(max_retry) + " times.");
 }
 
 drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGenerationConfig config)
@@ -156,7 +156,7 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
 
     OpenAIDataBody body {
         .model = model_name,
-        .messages = history,
+        .messages = std::move(history),
         .max_tokens = config.max_tokens,
         .temperature = config.temperature,
         .top_p = config.top_p,
