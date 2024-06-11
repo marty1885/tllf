@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cstddef>
+#include <drogon/HttpTypes.h>
+#include <drogon/utils/coroutine.h>
 #include <glaze/core/opts.hpp>
 #include <glaze/json/json_t.hpp>
 #include <glaze/json/read.hpp>
@@ -12,6 +14,7 @@
 
 #include <drogon/HttpClient.h>
 #include <drogon/HttpAppFramework.h>
+#include <trantor/net/EventLoop.h>
 #include <trantor/utils/Logger.h>
 #include <vector>
 
@@ -62,7 +65,7 @@ std::string_view trim(const std::string_view str, const std::string_view whitesp
 {
     size_t first = str.find_first_not_of(whitespace);
     if(std::string::npos == first)
-        return str;
+        return std::string_view{};
     size_t last = str.find_last_not_of(whitespace);
     return str.substr(first, (last - first + 1));
 }
@@ -112,7 +115,36 @@ OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::strin
     client = internal::getClient(url.withFragment("").withParam("").str(), drogon::app().getLoop());
 }
 
-drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerationConfig config)
+Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
+{
+    constexpr int max_retry = 4;
+    for(int retry = 0; retry < max_retry; retry++) {
+        bool errored = false;
+        // By defaul retry after 500ms
+        double retry_delay = 500;
+        try {
+            co_return co_await generateImpl(std::move(history), std::move(config));
+        }
+        catch(const RateLimitError& e) {
+            if(e.until_reset_ms.has_value())
+                retry_delay = e.until_reset_ms.value() / 1000;
+        }
+        catch(const std::exception& e) {
+            if(retry >= max_retry)
+                throw;
+            errored = true;
+            LOG_WARN << "Request failed. Retrying... " << e.what();
+            retry++;
+        }
+
+        if(errored) {
+            // retry after 500ms
+            co_await drogon::sleepCoro(trantor::EventLoop::getEventLoopOfCurrentThread(), retry_delay);
+        }
+    }
+}
+
+drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGenerationConfig config)
 {
     drogon::HttpRequestPtr req = drogon::HttpRequest::newHttpRequest();
     auto p = std::filesystem::path(base) / "chat/completions";
@@ -136,10 +168,18 @@ drogon::Task<std::string> OpenAIConnector::generate(Chatlog history, TextGenerat
     std::string body_str = glz::write_json(body);
     LOG_DEBUG << "Request: " << body_str;
     req->setBody(body_str);
-    req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+    req->setContentTypeCode(drogon::CT_APPLICATION_JSON); 
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
-    if(resp->statusCode() != drogon::k200OK) {
+    if(resp->statusCode() == drogon::k429TooManyRequests) {
+        std::optional<double> until_reset;
+        if(resp->getHeader("Retry-After") != "")
+            until_reset = std::stod(resp->getHeader("Retry-After")) * 1000;
+        else if(resp->getHeader("X-RateLimit-Reset") != "")
+            until_reset = std::stod(resp->getHeader("X-RateLimit-Reset")) * 1000;
+        throw RateLimitError(until_reset);
+    }
+    else if(resp->statusCode() != drogon::k200OK) {
         OpenAIError error;
         auto err = glz::read<laxed_opt>(error, resp->body());
         if(err || error.error.empty())
@@ -196,7 +236,7 @@ struct VertexError
     Error error;
 };
 
-Task<std::string> VertexAIConnector::generate(Chatlog history, TextGenerationConfig config)
+Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGenerationConfig config)
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
     req->setPath("/v1beta/models/" + model_name + ":generateContent");

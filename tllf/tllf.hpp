@@ -5,6 +5,7 @@
 #include <drogon/CacheMap.h>
 #include <drogon/HttpClient.h>
 #include <drogon/HttpTypes.h>
+#include <exception>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -69,7 +70,22 @@ std::string to_string(const Chatlog& chatlog);
 
 struct LLM
 {
-    virtual drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig()) = 0;
+    struct RateLimitError : public std::exception
+    {
+        RateLimitError(std::optional<double> until_reset_ms) : until_reset_ms(until_reset_ms) {}
+        std::optional<double> until_reset_ms;
+    };
+
+    /**
+     * Generate a response based on the given chat history.
+     * @param history The chat history to generate a response from.
+     * @param config The configuration for the generation.
+     * @return The generated response.
+     * @note This function is a proxy for the real implementation. Which has built-in capablity to handle retry.
+     * TODO: Handle rate limiting
+    */
+    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig());
+    virtual drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config) = 0;
 };
 
 struct TextEmbedder
@@ -102,6 +118,8 @@ struct DeepinfraTextEmbedder : public TextEmbedder
 /**
  * Connector for OpenAI-like API endpoints.
  *
+ * @note This connector is also the one used for most other services like DeepInfra and Perplexity
+ * as they all use the same OpenAI API schema
  * @param model_name The name of the model to use. For example, "text-davinci-003".
  * @param hoststr The host string. Defaults to "https://api.openai.com/".
  * @param api_key The API key to use
@@ -110,7 +128,7 @@ struct OpenAIConnector : public LLM
 {
     OpenAIConnector(const std::string& model_name, const std::string& baseurl="https://api.openai.com/", const std::string& api_key="");
 
-    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config) override;
+    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config) override;
 
     drogon::HttpClientPtr client;
     std::string base;
@@ -132,7 +150,7 @@ struct VertexAIConnector : public LLM
     {
     }
 
-    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config) override;
+    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config) override;
 
     drogon::HttpClientPtr client;
     std::string model_name;
