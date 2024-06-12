@@ -153,7 +153,7 @@ drogon::HttpClientPtr getClient(const std::string& hoststr, trantor::EventLoop* 
     bool ok = clientCache.findAndFetch(hoststr, res);
     if(ok)
         return res;
-    res = drogon::HttpClient::newHttpClient(hoststr, loop);
+    res = drogon::HttpClient::newHttpClient(hoststr, loop, false, true);
     clientCache.insert(hoststr, res, 1200);
     return res;
 }
@@ -397,8 +397,24 @@ struct VertexTextPart
 
 struct VertexImagePart
 {
-    std::string mime;
     std::vector<char> data;
+    std::string mime;
+
+    void deserialize(const std::string& str) {throw std::runtime_error("Not implemented");}
+    glz::json_t serialize() const
+    {
+        glz::json_t res;
+        res["mime_type"] = mime;
+        res["data"] = drogon::utils::base64Encode(std::string_view(data.data(), data.size()));
+        return res;
+    }
+};
+
+template<>
+struct glz::meta<VertexImagePart>
+{
+    using T = VertexImagePart;
+    static constexpr auto value = object("inline_data", custom<&T::deserialize, &T::serialize>);
 };
 
 struct VertexContent
@@ -442,16 +458,18 @@ void oai2vertexContent(VertexContent& v, const ChatEntry& oai)
             static_assert(std::is_same_v<T, ChatEntry::ListOfParts>);
             for(auto& p : c) {
                 std::visit([&](auto&& c) {
+                    using T = std::decay_t<decltype(c)>;
                     if constexpr(std::is_same_v<T, std::string>)
                         v.parts.push_back(VertexTextPart{c});
                     else if constexpr(std::is_same_v<T, ImageBlob>)
                         v.parts.push_back(VertexImagePart{.data = c.data, .mime = c.mime});
+                    else if constexpr(std::is_same_v<T, Url>)
+                        throw std::runtime_error("VertexAI does not support fetching from URL");
                     else
-                        throw std::runtime_error("Unsupported tyoe for VertexAI");
+                        throw std::runtime_error("Unsupported type for VertexAI");
                 }, p);
             }
         }
-            
     }, oai.content);
 }
 

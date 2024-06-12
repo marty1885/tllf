@@ -98,6 +98,21 @@ struct Chatlog : public std::vector<ChatEntry>
             res.push_back(ent);
         return res;
     }
+
+    void push_back(ChatEntry entry)
+    {
+        std::vector<ChatEntry>::push_back(entry);
+    }
+
+    void push_back(std::string content, std::string role)
+    {
+        push_back(ChatEntry{.content = content, .role = role});
+    }
+
+    void push_back(ChatEntry::ListOfParts parts, std::string role)
+    {
+        push_back(ChatEntry{.content = parts, .role = role});
+    }
 };
 
 std::string to_string(const Chatlog& chatlog);
