@@ -256,3 +256,8 @@ int Url::protocolDefaultPort(const std::string_view& proto)
     else 
         return 0;
 }
+
+void Url::from(const std::string& str)
+{
+    *this = Url(str);
+}

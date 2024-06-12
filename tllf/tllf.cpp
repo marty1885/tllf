@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <drogon/HttpTypes.h>
+#include <drogon/utils/Utilities.h>
 #include <drogon/utils/coroutine.h>
+#include <glaze/core/common.hpp>
 #include <glaze/core/opts.hpp>
 #include <glaze/json/json_t.hpp>
 #include <glaze/json/read.hpp>
@@ -16,12 +18,64 @@
 #include <drogon/HttpAppFramework.h>
 #include <trantor/net/EventLoop.h>
 #include <trantor/utils/Logger.h>
+#include <variant>
 #include <vector>
 
 using namespace tllf;
 using namespace drogon;
 
 static constexpr glz::opts laxed_opt = {.error_on_unknown_keys=false}; 
+
+template<>
+struct glz::meta<ImageBlob>
+{
+    using T = ImageBlob;
+    static constexpr auto value = object(
+        "url", custom<&T::read_data, &T::write_data>
+    );
+};
+
+template<>
+struct glz::meta<Url>
+{
+    using T = Url;
+    static constexpr auto value = object(
+        "url", custom<&T::from, &T::str>
+    );
+};
+
+template<>
+struct glz::meta<ImageUrl>
+{
+    using T = ImageUrl;
+    static constexpr auto value = object(
+        "url", custom<&T::read_data, &T::write_data>
+    );
+};
+
+template<>
+struct glz::meta<Image>
+{
+    using T = Image;
+    static constexpr auto value = object(
+        "image_url", &T::image_url
+    );
+};
+
+template <>
+struct glz::meta<Text>
+{
+    static constexpr auto value = object(
+        "text", &Text::text
+    );
+};
+
+template <>
+struct glz::meta<ChatEntry::Part>
+{
+   static constexpr std::string_view tag = "type";
+   static constexpr auto ids = std::array{"text", "image_url"};
+};
 
 namespace tllf
 {
@@ -46,6 +100,45 @@ std::string env(const std::string& key)
     if(val == nullptr) throw std::runtime_error("Environment variable " + key + " not set");
     return val;
 }
+}
+
+std::string ImageBlob::write_data()
+{
+    std::string_view sv(reinterpret_cast<const char*>(data.data()), data.size());
+    return "data:" + mime + ";base64," + drogon::utils::base64Encode(sv);
+}
+
+void ImageBlob::read_data(const std::string& value)
+{
+    std::string_view remaining = value;
+    if(remaining.starts_with("data:")) {
+        remaining = remaining.substr(5);
+    }
+    
+    size_t mime_end = remaining.find(';');
+    if(mime_end == std::string::npos)
+        throw std::runtime_error("Invalid data URL: " + value);
+    mime = std::string(remaining.substr(0, mime_end));
+
+    size_t base64_start = remaining.find(',');
+    if(base64_start == std::string::npos)
+        throw std::runtime_error("Invalid data URL: " + value);
+    data = drogon::utils::base64DecodeToVector(remaining.substr(base64_start + 1));
+}
+
+std::string ImageUrl::write_data()
+{
+    if(url.has_value())
+        return url->str();
+    else if(blob.has_value())
+        return blob->write_data();
+    else
+        throw std::runtime_error("ImageUrl is empty");
+}
+
+void ImageUrl::read_data(const std::string& value)
+{
+    throw std::runtime_error("ImageUrl is read-only");
 }
 
 namespace utils
@@ -253,21 +346,23 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
 
     for(auto& entry : history) {
         if(entry.role == "system") {
-            buffered_sys_message += entry.content + "\n";
+            if(!std::holds_alternative<std::string>(entry.content))
+                throw std::runtime_error("System message MUST be a string");
+            buffered_sys_message += std::get<std::string>(entry.content) + "\n";
         }
         else {
             if(!buffered_sys_message.empty()) {
                 VertexContent content;
                 content.role = "user";
                 content.parts.push_back({buffered_sys_message});
-                content.parts.push_back({entry.content});
+                content.parts.push_back({std::get<std::string>(entry.content)});
                 log.push_back(content);
                 buffered_sys_message.clear();
                 continue;
             }
             VertexContent content;
             content.role = entry.role;
-            content.parts.push_back({entry.content});
+            content.parts.push_back({std::get<std::string>(entry.content)});
             log.push_back(content);
         }
     }
@@ -584,7 +679,10 @@ std::string tllf::to_string(const Chatlog& chatlog)
 {
     std::string res;
     for(auto& entry : chatlog) {
-        res += entry.role + ": " + entry.content + "\n";
+        if(std::holds_alternative<std::string>(entry.content))
+            res += entry.role + ": " + std::get<std::string>(entry.content) + "\n";
+        else
+            throw std::runtime_error("Chatlog entry is not a string");
     }
     return res;
 }

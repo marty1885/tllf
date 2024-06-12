@@ -20,7 +20,8 @@ Task<> func()
 
     tllf::PromptTemplate userprompt("What is your name?");
 
-    tllf::Chatlog chatlog = {{sysprompt.render(), "system"}, {userprompt.render(), "user"}};
+    tllf::ImageBlob t{{'\1', '\2'}, "image/png"};
+    tllf::Chatlog chatlog = {{sysprompt.render(), "system"}, {tllf::ChatEntry::ListOfParts{tllf::Image{t}}, "user"}};
     auto result = co_await llm->generate(chatlog, config);
     std::cout << "LLM Generated:\n=====\n" << result << "\n=====\n";
 

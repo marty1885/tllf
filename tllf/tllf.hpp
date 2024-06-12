@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <sys/types.h>
 #include <trantor/net/EventLoop.h>
 #include <unordered_map>
 #include <glaze/glaze.hpp>
@@ -21,6 +22,7 @@
 
 namespace tllf
 {
+
 
 namespace internal
 {
@@ -45,9 +47,47 @@ struct TextGenerationConfig
     std::optional<int> stop_sequence;
 };
 
+struct ImageBlob
+{
+    std::vector<char> data;
+    std::string mime;
+
+    // Functions for Glaze to serialize the data structure
+    // into formats accepts by OpenAI
+    std::string write_data();
+    void read_data(const std::string& data);
+};
+
+struct ImageUrl
+{
+    ImageUrl() = default;
+    ImageUrl(const std::string& url) : url(url) {}
+    ImageUrl(const tllf::Url& url) : url(url) {}
+    ImageUrl(const ImageBlob& blob) : blob(blob) {}
+
+    std::optional<tllf::Url> url;
+    std::optional<ImageBlob> blob;
+
+    std::string write_data();
+    void read_data(const std::string& data);
+};
+
+struct Image
+{
+    // Don't ask. The OpenAI API expects us to feed it an image as base64 encoded string.
+    ImageUrl image_url;
+};
+
+struct Text
+{
+    std::string text;
+};
+
 struct ChatEntry
 {
-    std::string content;
+    using Part = std::variant<Text, Image>;
+    using ListOfParts = std::vector<Part>;
+    std::variant<std::string, ListOfParts> content;
     std::string role;
 };
 
