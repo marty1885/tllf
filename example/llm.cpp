@@ -1,3 +1,4 @@
+#include "tllf/url_parser.hpp"
 #include <drogon/utils/coroutine.h>
 #include <glaze/core/opts.hpp>
 #include <tllf/tllf.hpp>
@@ -20,8 +21,7 @@ Task<> func()
 
     tllf::PromptTemplate userprompt("What is your name?");
 
-    tllf::ImageBlob t{{'\1', '\2'}, "image/png"};
-    tllf::Chatlog chatlog = {{sysprompt.render(), "system"}, {tllf::ChatEntry::ListOfParts{tllf::Image{t}}, "user"}};
+    tllf::Chatlog chatlog = {{sysprompt.render(), "system"}, {"What is your name?", "user"}};
     auto result = co_await llm->generate(chatlog, config);
     std::cout << "LLM Generated:\n=====\n" << result << "\n=====\n";
 

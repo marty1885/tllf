@@ -4,6 +4,7 @@
 #include <drogon/utils/Utilities.h>
 #include <drogon/utils/coroutine.h>
 #include <glaze/core/common.hpp>
+#include <glaze/core/meta.hpp>
 #include <glaze/core/opts.hpp>
 #include <glaze/json/json_t.hpp>
 #include <glaze/json/read.hpp>
@@ -44,24 +45,6 @@ struct glz::meta<Url>
     );
 };
 
-template<>
-struct glz::meta<ImageUrl>
-{
-    using T = ImageUrl;
-    static constexpr auto value = object(
-        "url", custom<&T::read_data, &T::write_data>
-    );
-};
-
-template<>
-struct glz::meta<Image>
-{
-    using T = Image;
-    static constexpr auto value = object(
-        "image_url", &T::image_url
-    );
-};
-
 template <>
 struct glz::meta<Text>
 {
@@ -70,11 +53,91 @@ struct glz::meta<Text>
     );
 };
 
-template <>
-struct glz::meta<ChatEntry::Part>
+glz::json_t to_json(const ChatEntry::Part& data)
 {
-   static constexpr std::string_view tag = "type";
-   static constexpr auto ids = std::array{"text", "image_url"};
+    glz::json_t json;
+    std::visit([&](auto&& arg) -> void {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+            json["type"] = "text";
+            json["text"] = arg;
+        }
+        else if constexpr(std::is_same_v<T, Url>) {
+            json["type"] = "image_url";
+            json["image_url"]["url"] = arg.str();
+        }
+        else if constexpr(std::is_same_v<T, ImageBlob>) {
+            json["type"] = "image_url";
+            json["image_url"]["url"] = arg.write_data();
+        }
+        else if constexpr(std::is_same_v<T, ImageBlob>) {
+            return arg.write_data();
+        }
+    }, data);
+    return json;
+}
+
+glz::json_t ChatEntry::Content::write_data() const
+{
+    auto& data = *this;
+    glz::json_t json;
+    std::visit([&](auto&& arg) -> void {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+            json = arg;
+        }
+        else if constexpr(std::is_same_v<T, ListOfParts>) {
+            glz::json_t::array_t arr;
+            arr.reserve(arg.size());
+            for(auto& part : arg) {
+                arr.push_back(to_json(part));
+            }
+            json = arr;
+        }
+    }, data);
+    return json;
+}
+
+void ChatEntry::Content::read_data(const std::string& data)
+{
+    throw std::runtime_error("ChatEntry::Content is read-only");
+}
+
+template <>
+struct glz::meta<ChatEntry::Content>
+{
+   using T = ChatEntry::Content;
+    static constexpr auto value = object(
+        "content", custom<&T::read_data, &T::write_data>
+    );
+};
+
+glz::json_t ChatEntry::write_content() const
+{
+    glz::json_t json;
+    glz::json_t c = content.write_data();
+    if(c.holds<std::string>())
+        json = c.get<std::string>();
+    else if(c.holds<glz::json_t::array_t>())
+        json = c.get<glz::json_t::array_t>();
+    else
+        throw std::runtime_error("Unexpected data while serializing conversaion content");
+    return json;
+}
+
+void ChatEntry::read_data(const std::string& data)
+{
+    throw std::runtime_error("ChatEntry is read-only");
+}
+
+template <>
+struct glz::meta<ChatEntry>
+{
+   using T = ChatEntry;
+    static constexpr auto value = object(
+        "content", custom<&T::read_data, &T::write_content>,
+        "role", &T::role
+    );
 };
 
 namespace tllf
@@ -102,7 +165,7 @@ std::string env(const std::string& key)
 }
 }
 
-std::string ImageBlob::write_data()
+std::string ImageBlob::write_data() const
 {
     std::string_view sv(reinterpret_cast<const char*>(data.data()), data.size());
     return "data:" + mime + ";base64," + drogon::utils::base64Encode(sv);
@@ -126,19 +189,52 @@ void ImageBlob::read_data(const std::string& value)
     data = drogon::utils::base64DecodeToVector(remaining.substr(base64_start + 1));
 }
 
-std::string ImageUrl::write_data()
-{
-    if(url.has_value())
-        return url->str();
-    else if(blob.has_value())
-        return blob->write_data();
-    else
-        throw std::runtime_error("ImageUrl is empty");
-}
+static ImageBlob fromFile(const std::string& path, std::string mime) {
+    // Open the file in binary mode
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        throw std::runtime_error("Failed to open file: " + path);
+    }
 
-void ImageUrl::read_data(const std::string& value)
-{
-    throw std::runtime_error("ImageUrl is read-only");
+    // Determine the file size
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    // Read the file into a buffer
+    std::vector<char> buffer(size);
+    if (!file.read(buffer.data(), size)) {
+        throw std::runtime_error("Failed to read file: " + path);
+    }
+    file.close();
+
+    // Determine MIME type if not provided
+    if (mime.empty()) {
+        if(buffer.size() < 8)
+            throw std::runtime_error("File too small. Cannot automatically decide file type");
+        std::string_view magic = std::string_view(buffer.data(), 8);
+        if(magic.starts_with("\x89\x50\x4E\x47\x0D\x0A\x1A\x0A"))
+            mime = "image/png";
+        else if(magic.starts_with("\xFF\xD8\xFF"))
+            mime = "image/jpeg";
+        else if(magic.starts_with("GIF87a") || magic.starts_with("GIF89a"))
+            mime = "image/gif";
+        else if(magic.starts_with("BM"))
+            mime = "image/bmp";
+        else if(magic.starts_with("RIFF") && magic.substr(4, 4) == "WEBP")
+            mime = "image/webp";
+        else if(magic.starts_with("\x49\x49\x2A\x00") || magic.starts_with("\x4D\x4D\x00\x2A"))
+            mime = "image/tiff";
+        else if(magic.starts_with("\x00\x00\x01\x00"))
+            mime = "image/x-icon";
+        else
+            throw std::runtime_error("Unsupported file type");
+    }
+
+    // Create and return the ImageBlob
+    ImageBlob blob;
+    blob.data = std::move(buffer);
+    blob.mime = mime;
+    return blob;
 }
 
 namespace utils

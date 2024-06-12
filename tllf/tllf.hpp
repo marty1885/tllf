@@ -52,30 +52,12 @@ struct ImageBlob
     std::vector<char> data;
     std::string mime;
 
+    static ImageBlob fromFile(const std::string& path, std::string mime = "");
+
     // Functions for Glaze to serialize the data structure
     // into formats accepts by OpenAI
-    std::string write_data();
+    std::string write_data() const;
     void read_data(const std::string& data);
-};
-
-struct ImageUrl
-{
-    ImageUrl() = default;
-    ImageUrl(const std::string& url) : url(url) {}
-    ImageUrl(const tllf::Url& url) : url(url) {}
-    ImageUrl(const ImageBlob& blob) : blob(blob) {}
-
-    std::optional<tllf::Url> url;
-    std::optional<ImageBlob> blob;
-
-    std::string write_data();
-    void read_data(const std::string& data);
-};
-
-struct Image
-{
-    // Don't ask. The OpenAI API expects us to feed it an image as base64 encoded string.
-    ImageUrl image_url;
 };
 
 struct Text
@@ -85,10 +67,20 @@ struct Text
 
 struct ChatEntry
 {
-    using Part = std::variant<Text, Image>;
+    using Part = std::variant<std::string, Url, ImageBlob>;
     using ListOfParts = std::vector<Part>;
-    std::variant<std::string, ListOfParts> content;
+    struct Content : public std::variant<std::string, ListOfParts>
+    {
+        using std::variant<std::string, ListOfParts>::variant;
+
+        glz::json_t write_data() const;
+        void read_data(const std::string& data);
+    };
+    Content content;
     std::string role;
+
+    glz::json_t write_content() const;
+    void read_data(const std::string& data);
 };
 
 struct Chatlog : public std::vector<ChatEntry>
