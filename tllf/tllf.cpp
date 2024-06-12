@@ -19,6 +19,7 @@
 #include <drogon/HttpAppFramework.h>
 #include <trantor/net/EventLoop.h>
 #include <trantor/utils/Logger.h>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -189,7 +190,7 @@ void ImageBlob::read_data(const std::string& value)
     data = drogon::utils::base64DecodeToVector(remaining.substr(base64_start + 1));
 }
 
-static ImageBlob fromFile(const std::string& path, std::string mime) {
+ImageBlob ImageBlob::fromFile(const std::string& path, std::string mime) {
     // Open the file in binary mode
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) {
@@ -389,15 +390,21 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     co_return r;
 }
 
-struct VertexPart
+struct VertexTextPart
 {
     std::string text;
+};
+
+struct VertexImagePart
+{
+    std::string mime;
+    std::vector<char> data;
 };
 
 struct VertexContent
 {
     std::string role;
-    std::vector<VertexPart> parts;
+    std::vector<std::variant<VertexTextPart, VertexImagePart>> parts;
 };
 
 struct VertexDataBody
@@ -425,6 +432,29 @@ struct VertexError
     Error error;
 };
 
+void oai2vertexContent(VertexContent& v, const ChatEntry& oai)
+{
+    std::visit([&](auto&& c) {
+        using T = std::decay_t<decltype(c)>;
+        if constexpr(std::is_same_v<T, std::string>)
+            v.parts.push_back(VertexTextPart{c});
+        else {
+            static_assert(std::is_same_v<T, ChatEntry::ListOfParts>);
+            for(auto& p : c) {
+                std::visit([&](auto&& c) {
+                    if constexpr(std::is_same_v<T, std::string>)
+                        v.parts.push_back(VertexTextPart{c});
+                    else if constexpr(std::is_same_v<T, ImageBlob>)
+                        v.parts.push_back(VertexImagePart{.data = c.data, .mime = c.mime});
+                    else
+                        throw std::runtime_error("Unsupported tyoe for VertexAI");
+                }, p);
+            }
+        }
+            
+    }, oai.content);
+}
+
 Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGenerationConfig config)
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
@@ -447,18 +477,14 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
             buffered_sys_message += std::get<std::string>(entry.content) + "\n";
         }
         else {
-            if(!buffered_sys_message.empty()) {
-                VertexContent content;
-                content.role = "user";
-                content.parts.push_back({buffered_sys_message});
-                content.parts.push_back({std::get<std::string>(entry.content)});
-                log.push_back(content);
-                buffered_sys_message.clear();
-                continue;
-            }
             VertexContent content;
             content.role = entry.role;
-            content.parts.push_back({std::get<std::string>(entry.content)});
+            if(!buffered_sys_message.empty()) {
+                content.parts.push_back(VertexTextPart{buffered_sys_message});
+                buffered_sys_message.clear();
+            }
+            
+            oai2vertexContent(content, entry);
             log.push_back(content);
         }
     }
@@ -499,7 +525,10 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
         throw std::runtime_error("Server response does not contain any candidates");
     if(response.candidates[0].content.parts.size() == 0)
         throw std::runtime_error("Server response does not contain any content parts");
-    co_return response.candidates[0].content.parts[0].text;
+
+    if(!std::holds_alternative<VertexTextPart>(response.candidates[0].content.parts[0]))
+        throw std::runtime_error("only supports text responses now");
+    co_return std::get<VertexTextPart>(response.candidates[0].content.parts[0]).text;
 }
 
 glz::json_t to_json(const std::vector<std::string> vec)
