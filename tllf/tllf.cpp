@@ -310,7 +310,7 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
     for(int retry = 0; retry < max_retry; retry++) {
         bool errored = false;
         // By defaul retry after 500ms
-        double retry_delay = 500;
+        double retry_delay = 0.5;
         try {
             co_return co_await generateImpl(std::move(history), std::move(config));
         }
@@ -327,7 +327,6 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
         }
 
         if(errored) {
-            // retry after 500ms
             co_await drogon::sleepCoro(trantor::EventLoop::getEventLoopOfCurrentThread(), retry_delay);
         }
     }
@@ -364,9 +363,9 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     if(resp->statusCode() == drogon::k429TooManyRequests) {
         std::optional<double> until_reset;
         if(resp->getHeader("Retry-After") != "")
-            until_reset = std::stod(resp->getHeader("Retry-After")) * 1000;
+            until_reset = std::stod(resp->getHeader("Retry-After"));
         else if(resp->getHeader("X-RateLimit-Reset") != "")
-            until_reset = std::stod(resp->getHeader("X-RateLimit-Reset")) * 1000;
+            until_reset = std::stod(resp->getHeader("X-RateLimit-Reset"));
         throw RateLimitError(until_reset);
     }
     else if(resp->statusCode() != drogon::k200OK) {
