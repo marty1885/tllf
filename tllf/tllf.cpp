@@ -361,12 +361,12 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() == drogon::k429TooManyRequests) {
-        std::optional<double> until_reset;
+        double until_reset = 2.;
         if(resp->getHeader("Retry-After") != "")
             until_reset = std::stod(resp->getHeader("Retry-After"));
         else if(resp->getHeader("X-RateLimit-Reset") != "")
             until_reset = std::stod(resp->getHeader("X-RateLimit-Reset"));
-        throw RateLimitError(until_reset);
+        throw RateLimitError(until_reset * 1000);
     }
     else if(resp->statusCode() != drogon::k200OK) {
         OpenAIError error;
@@ -495,7 +495,8 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
         }
         else {
             VertexContent content;
-            content.role = entry.role;
+            // Vertex AI has different name vs OpenAI
+            content.role = entry.role == "user" ? "user" : "model";
             if(!buffered_sys_message.empty()) {
                 content.parts.push_back(VertexTextPart{buffered_sys_message});
                 buffered_sys_message.clear();

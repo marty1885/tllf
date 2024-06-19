@@ -14,5 +14,6 @@ Features:
 
 ## TODOs:
 
-- [ ] More general input API
+- [x] More general input API
 - [ ] More general output API
+- [ ] Some framework to automatically retry with larger LLMs if as task fails
