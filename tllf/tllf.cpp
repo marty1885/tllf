@@ -23,6 +23,8 @@
 #include <variant>
 #include <vector>
 
+#include <yaml-cpp/yaml.h>
+
 using namespace tllf;
 using namespace drogon;
 
@@ -709,6 +711,39 @@ glz::json_t JsonParser::parseReply(const std::string& reply)
 glz::json_t PlaintextParser::parseReply(const std::string& reply)
 {
     return reply;
+}
+
+static void jsonFixNumbers(glz::json_t& json)
+{
+    if(json.holds<std::string>()) {
+        size_t pos = 0;
+        double n = std::stod(json.get<std::string>(), &pos);
+        if(pos == json.get<std::string>().size())
+            json = n;
+    }
+    else if(json.holds<glz::json_t::array_t>()) {
+        for(auto& elem : json.get<glz::json_t::array_t>())
+            jsonFixNumbers(elem);
+    }
+    else if(json.holds<glz::json_t::object_t>()) {
+        for(auto& [key, elem] : json.get<glz::json_t::object_t>())
+            jsonFixNumbers(elem);
+    }
+}
+
+glz::json_t YamlParser::parseReply(const std::string& reply)
+{
+    YAML::Node node = YAML::Load(reply);
+    YAML::Emitter emitter;
+    emitter << YAML::DoubleQuoted << YAML::Flow << YAML::BeginSeq << node << YAML::EndSeq;
+
+    LOG_DEBUG << "JSON: " << emitter.c_str();
+    
+    glz::json_t parsed;
+    auto err = glz::read_json(parsed, emitter.c_str());
+    if(err)
+        throw std::runtime_error("Error parsing YAML converted JSON: " + std::string(err.includer_error));
+    return parsed;
 }
 
 std::string PromptTemplate::render() const

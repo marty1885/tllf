@@ -253,6 +253,11 @@ struct PlaintextParser : public LanguageParser
     glz::json_t parseReply(const std::string& reply) override;
 };
 
+struct YamlParser : public LanguageParser
+{
+    glz::json_t parseReply(const std::string& reply) override;
+};
+
 struct PromptTemplate
 {
     PromptTemplate() = default;
