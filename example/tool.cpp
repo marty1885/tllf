@@ -1,0 +1,41 @@
+#include "tllf/tool.hpp"
+#include "tllf/tllf.hpp"
+#include <drogon/utils/coroutine.h>
+#include <drogon/drogon.h>
+#include <glaze/json/json_t.hpp>
+
+using namespace tllf;
+using namespace drogon;
+
+
+tllf::ToolResult foo(std::string str, int num)
+{
+    TLLF_DOC("foo")
+        .BRIEF("An example tool.")
+        .PARAM(str, "a string")
+        .PARAM(num, "a number");
+    co_return str + std::to_string(num);
+}
+
+Task<> func()
+{
+    PromptTemplate prompt("{tools_list\n\n{tools_description}\n");
+    auto tool = co_await toolize(foo);
+    glz::json_t json;
+    json["str"] = "Hello";
+    json["num"] = 42;
+    auto result = co_await tool(json);
+    std::cout << result << std::endl;
+
+    Toolset tools;
+    tools.push_back(tool);
+
+    std::cout << tools.generateToolList() << std::endl;
+    std::cout << tools.generateToolDescription() << std::endl;
+}
+
+int main()
+{
+    app().getLoop()->queueInLoop(async_func(func));
+    app().run();
+}
