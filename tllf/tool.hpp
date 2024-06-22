@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <drogon/utils/coroutine.h>
 #include <glaze/core/write.hpp>
 #include <glaze/json/json_t.hpp>
@@ -225,7 +224,7 @@ struct Toolset : public std::vector<Tool>
 };
 
 template <typename Func>
-drogon::Task<Tool> toolize(const std::string& name, Func&& func)
+drogon::Task<Tool> toolize(Func&& func)
 {
     using FuncType = std::remove_cvref_t<Func>;
     auto doc = co_await getToolDoc(func);
@@ -260,7 +259,7 @@ drogon::Task<Tool> toolize(const std::string& name, Func&& func)
         co_return std::get<std::string>(res);
     };
 
-    co_return Tool{.name = name,.func = std::move(functor), .doc = std::move(doc)};
+    co_return Tool{.name = doc.name,.func = std::move(functor), .doc = std::move(doc)};
 }
 
 } // namespace tllf

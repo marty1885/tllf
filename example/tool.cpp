@@ -27,8 +27,8 @@ tllf::ToolResult bar(double n)
 
 Task<> func()
 {
-    auto tool = co_await toolize("foo", foo);
-    auto tool2 = co_await toolize("bar", bar);
+    auto tool = co_await toolize(foo);
+    auto tool2 = co_await toolize(bar);
     glz::json_t json;
     json["str"] = "Hello";
     json["num"] = 42;

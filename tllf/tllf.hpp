@@ -8,10 +8,8 @@
 #include <drogon/HttpTypes.h>
 #include <exception>
 #include <initializer_list>
-#include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <sys/types.h>
 #include <trantor/net/EventLoop.h>
 #include <unordered_map>

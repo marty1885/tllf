@@ -1,4 +1,5 @@
 #include <drogon/drogon_test.h>
+#include <drogon/utils/coroutine.h>
 #include <glaze/core/context.hpp>
 #include <glaze/json/json_t.hpp>
 #include <glaze/json/write.hpp>
@@ -178,6 +179,34 @@ steps:
     auto json = tllf::to_json(parsed["steps"].get<std::vector<MarkdownLikeParser::ListNode>>()[0]);
     REQUIRE(glz::write_json(json) == R"({"online_search":{"page":2,"query":"cat"}})");
 }
+
+tllf::ToolResult noop_tool(std::string s)
+{
+    TLLF_DOC("noop")
+        .BRIEF("Returns the same thing in it is given.")
+        .PARAM(s, "The string to be returned");
+    co_return s;
+}
+
+
+DROGON_TEST(tool)
+{
+    auto n = [TEST_CTX]()->drogon::AsyncTask {
+        auto f = co_await toolize(noop_tool);
+        auto doc = co_await getToolDoc(noop_tool);
+        CO_REQUIRE(doc.name == "noop");
+        CO_REQUIRE(doc.brief_ == "Returns the same thing in it is given.");
+        CO_REQUIRE(doc.params.size() == 1);
+        CO_REQUIRE(doc.params[0].first == "s");
+        CO_REQUIRE(doc.params[0].second.desc == "The string to be returned");
+
+        glz::json_t invoke_data;
+        invoke_data["s"] = "Hello!";
+        auto res = co_await f(invoke_data);
+        CO_REQUIRE(res == "Hello!");
+    };
+}
+
 int main(int argc, char** argv)
 {
     return drogon::test::run(argc, argv);
