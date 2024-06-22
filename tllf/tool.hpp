@@ -5,6 +5,7 @@
 #include <drogon/utils/coroutine.h>
 #include <glaze/core/write.hpp>
 #include <glaze/json/json_t.hpp>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <glaze/glaze.hpp>
@@ -12,6 +13,9 @@
 #include <type_traits>
 #include <variant>
 
+#include <tllf/inner/utils.hpp>
+
+#include <yaml-cpp/emittermanip.h>
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
 
@@ -50,6 +54,7 @@ struct FunctionTrait<R(Args...)>
 struct ParamInfo
 {
     std::string desc;
+    std::function<bool(const std::string&)> validator;
 };
 
 template <typename T>
@@ -84,7 +89,18 @@ struct ToolDoc
     std::string name;
 
     ToolDoc& brief(std::string str) { brief_ = std::move(str); return *this; }
-    ToolDoc& param(std::string name, void* ptr, std::string desc) {(void)ptr; params.push_back({name, internal::ParamInfo{desc}}); return *this;}
+    template <typename T>
+    ToolDoc& param(std::string name, const T* ptr, std::string desc) {
+        (void)ptr;
+        using Type = std::remove_cvref_t<T>;
+        auto validator = [](const std::string& str) -> bool {
+            Type val;
+            auto err = glz::read_json(val, str);
+            return err == glz::error_code::none;
+        };
+        params.push_back({name, internal::ParamInfo{desc, validator}});
+        return *this;
+    }
     
     static ToolDoc make(std::string name) { ToolDoc doc; doc.name = std::move(name); return doc;}
 
@@ -120,69 +136,96 @@ drogon::Task<ToolDoc> getToolDoc(Func&& func)
 
 struct Tool
 {
+    std::string name;
     std::function<drogon::Task<std::string>(glz::json_t)> func;
     ToolDoc doc;
 
     drogon::Task<std::string> operator()(glz::json_t json) { return func(std::move(json)); }
+
+    template <typename ... Args>
+    std::string generateInvokeExample(Args&&... args)
+    {
+        constexpr size_t num_args = sizeof...(Args);
+        if(num_args != doc.params.size())
+            throw std::runtime_error("Argument size does not match tool params");
+
+        glz::json_t json;
+        size_t idx = 0;
+
+        auto apply_func = [&](auto& val) {
+            std::string str = glz::write_json(val);
+            if(!doc.params[idx].second.validator(str))
+                // TODO: This error message is confusing. We should provide a better error message
+                throw std::runtime_error("Parameter " + doc.params[idx].first + " does not seem to be serializable from example");
+            
+            glz::json_t val_json;
+            auto err = glz::read_json(val_json, str);
+            if(err)
+                throw std::runtime_error("Failed to read json during example generation. This should not happen");
+            json[doc.params[idx].first] = val_json;
+            idx++;
+        };
+
+        std::apply([&](auto&... args) { (apply_func(args), ...); }, std::forward_as_tuple(args...));
+        YAML::Node yaml;
+        yaml[name] = internal::json2yaml(json);
+        YAML::Emitter emitter;
+        emitter << yaml;
+
+        std::stringstream ss;
+        // HACK: add a - to the beginning of each line to turn it into a markdown list
+        ss << emitter.c_str();
+        std::string line;
+        std::string result;
+        while(std::getline(ss, line)) {
+            auto pos = line.find_first_not_of(' ');
+            std::string new_line;
+            if(pos != std::string::npos) {
+                for(size_t i=0;i<pos;i++)
+                    new_line += ' ';
+                new_line += "- " + line.substr(pos);
+            }
+            else
+                new_line = "- " + line;
+            result += new_line + "\n";
+        }
+        if(result.size() != 0 && result.back() == '\n')
+            result.pop_back();
+        return result;
+    }
 };
-
-inline void json2yaml_internal(YAML::Node& node, const glz::json_t& json)
-{
-    if(json.holds<glz::json_t::object_t>()) {
-        for(auto& [key, val] : json.get<glz::json_t::object_t>()) {
-            YAML::Node child;
-            json2yaml_internal(child, val);
-            node[key] = child;
-        }
-    }
-    else if(json.holds<glz::json_t::array_t>()) {
-        for(auto& val : json.get<glz::json_t::array_t>()) {
-            YAML::Node child;
-            json2yaml_internal(child, val);
-            node.push_back(child);
-        }
-    }
-    else if(json.holds<std::string>())
-        node = json.get<std::string>();
-    else if(json.holds<double>())
-        node = json.get<double>();
-    else if(json.holds<bool>())
-        node = json.get<bool>();
-    else
-        throw std::runtime_error("Unknown json type");
-}
-
-inline YAML::Node json2yaml(const glz::json_t& json)
-{
-    YAML::Node node;
-    json2yaml_internal(node, json);
-    return node;
-}
 
 struct Toolset : public std::vector<Tool>
 {
     std::string generateToolList()
     {
-        std::string res;
-        for(auto& tool : *this)
-            res += "- " + tool.doc.name + ": " + tool.doc.brief_ + "\n";
-        return res;
+        std::string str;
+        for(auto& tool : *this) {
+            str += "- " + tool.name + "\n";
+        }
+        if(str.size() != 0 && str.back() == '\n')
+            str.pop_back(); 
+        return str;
     }
 
     std::string generateToolDescription()
     {
-        std::string res;
+        // Can't use YAML here because we want syntax closer to Markdown
+        std::string str;
         for(auto& tool : *this) {
-            res += "- " + tool.doc.name + ": " + tool.doc.brief_ + "\n";
-            for(auto& param : tool.doc.params)
-                res += "  - " + param.first + ": " + param.second.desc + "\n";
+            str += "- " + tool.name + ": " + tool.doc.brief_ + "\n";
+            for(auto& param : tool.doc.params) {
+                str += "  - " + param.first + ": <" + param.second.desc + ">\n";
+            }
         }
-        return res;
+        if(str.size() != 0 && str.back() == '\n')
+            str.pop_back();
+        return str;
     }
 };
 
 template <typename Func>
-drogon::Task<Tool> toolize(Func&& func)
+drogon::Task<Tool> toolize(const std::string& name, Func&& func)
 {
     using FuncType = std::remove_cvref_t<Func>;
     auto doc = co_await getToolDoc(func);
@@ -217,7 +260,7 @@ drogon::Task<Tool> toolize(Func&& func)
         co_return std::get<std::string>(res);
     };
 
-    co_return Tool{.func = std::move(functor), .doc = std::move(doc)};
+    co_return Tool{.name = name,.func = std::move(functor), .doc = std::move(doc)};
 }
 
 } // namespace tllf

@@ -1,3 +1,4 @@
+#include "tllf/tool.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <drogon/HttpTypes.h>
@@ -581,6 +582,7 @@ glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
         remaining = remaining.substr(next_line_end + 1);
     };
 
+    size_t last_indent_level = 0;
     while(!remaining.empty()) {
         if(remaining.size() == last_remaining_size)
             throw std::runtime_error("Parser stuck in infinite loop. THIS IS A BUG.");
@@ -605,23 +607,49 @@ glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
                 }
                 consume_line();
             }
-            std::vector<std::string> items;
+            
+            glz::json_t list_tree = glz::json_t::array_t();
+            std::vector<glz::json_t*> list_stack = {&list_tree};
             while(remaining.empty() == false) {
-                line = utils::trim(peek_next_line());
-                if(line.empty()) {
+                line = peek_next_line();
+                auto trimmed = utils::trim(line);
+                if(trimmed.empty()) {
                     consume_line();
                     continue;
                 }
-                if(!line.starts_with("- "))
+                if(!trimmed.starts_with("- "))
                     break;
-                items.push_back(line.substr(2));
+
+                // Assume 2 spaces per indent
+                size_t leading_spaces = line.find_first_not_of(" ");
+                size_t indent_level = leading_spaces / 2;
+                if(indent_level > last_indent_level+1)
+                    throw std::runtime_error("Invalid list indentation");
+                
+                std::string value = std::string(trimmed.substr(2));
+                glz::json_t* current = nullptr;
+                if(indent_level == last_indent_level) {
+                    current = list_stack.back();
+                }
+                else if(indent_level > last_indent_level) {
+                    list_stack.back()->get<glz::json_t::array_t>().push_back(glz::json_t::array_t());
+                    current = &list_stack.back()->get<glz::json_t::array_t>().back();
+                }
+                else {
+                    for(size_t i = 0; i < last_indent_level - indent_level; i++)
+                        list_stack.pop_back();
+                    current = list_stack.back();
+                }
+                assert(current != nullptr);
                 consume_line();
+                current->get<glz::json_t::array_t>().push_back(value);
+                last_indent_level = indent_level;
             }
 
-            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower); 
             if(altname_for_plaintext.contains(key))
                 key = "-";
-            parsed[key] = to_json(items);
+            parsed[key] = list_tree;
         }
         // HACK: There is an ambiguity here. Usually we treat lines with a colon as key-value pairs. ex:
         // name: Tom
@@ -733,17 +761,7 @@ static void jsonFixNumbers(glz::json_t& json)
 
 glz::json_t YamlParser::parseReply(const std::string& reply)
 {
-    YAML::Node node = YAML::Load(reply);
-    YAML::Emitter emitter;
-    emitter << YAML::DoubleQuoted << YAML::Flow << YAML::BeginSeq << node << YAML::EndSeq;
-
-    LOG_DEBUG << "JSON: " << emitter.c_str();
-    
-    glz::json_t parsed;
-    auto err = glz::read_json(parsed, emitter.c_str());
-    if(err)
-        throw std::runtime_error("Error parsing YAML converted JSON: " + std::string(err.includer_error));
-    return parsed;
+    return internal::yaml2json(YAML::Load(reply));
 }
 
 std::string PromptTemplate::render() const

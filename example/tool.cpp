@@ -17,10 +17,18 @@ tllf::ToolResult foo(std::string str, int num)
     co_return str + std::to_string(num);
 }
 
+tllf::ToolResult bar(double n)
+{
+    TLLF_DOC("bar")
+        .BRIEF("Another example tool.")
+        .PARAM(n, "a floating point number");
+    co_return std::to_string(n * 2);
+}
+
 Task<> func()
 {
-    PromptTemplate prompt("{tools_list\n\n{tools_description}\n");
-    auto tool = co_await toolize(foo);
+    auto tool = co_await toolize("foo", foo);
+    auto tool2 = co_await toolize("bar", bar);
     glz::json_t json;
     json["str"] = "Hello";
     json["num"] = 42;
@@ -29,9 +37,24 @@ Task<> func()
 
     Toolset tools;
     tools.push_back(tool);
+    tools.push_back(tool2);
 
-    std::cout << tools.generateToolList() << std::endl;
-    std::cout << tools.generateToolDescription() << std::endl;
+    PromptTemplate prompt(R"(
+======
+Tools
+{tools_list}
+
+Description
+{tools_description}
+
+Example
+{tool_example}
+======
+)");
+    prompt.setVariable("tools_list", tools.generateToolList());
+    prompt.setVariable("tools_description", tools.generateToolDescription());
+    prompt.setVariable("tool_example", tool.generateInvokeExample("Hello", 42));
+    std::cout << prompt.render() << std::endl;
 }
 
 int main()
