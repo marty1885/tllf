@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
 
 using namespace tllf;
@@ -560,9 +561,9 @@ glz::json_t to_json(const std::vector<std::string> vec)
     return res;
 }
 
-glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
+std::map<std::string, MarkdownLikeParser::MarkdownLikeData> MarkdownLikeParser::parseReply(const std::string& reply)
 {
-    glz::json_t parsed;
+    std::map<std::string, MarkdownLikeData> parsed;
     std::string_view remaining(reply);
     size_t last_remaining_size = -1;
 
@@ -582,7 +583,6 @@ glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
         remaining = remaining.substr(next_line_end + 1);
     };
 
-    size_t last_indent_level = 0;
     while(!remaining.empty()) {
         if(remaining.size() == last_remaining_size)
             throw std::runtime_error("Parser stuck in infinite loop. THIS IS A BUG.");
@@ -608,8 +608,8 @@ glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
                 consume_line();
             }
             
-            glz::json_t list_tree = glz::json_t::array_t();
-            std::vector<glz::json_t*> list_stack = {&list_tree};
+            ListNode root_node;
+            std::vector<ListNode*> list_stack = {&root_node};
             while(remaining.empty() == false) {
                 line = peek_next_line();
                 auto trimmed = utils::trim(line);
@@ -623,33 +623,37 @@ glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
                 // Assume 2 spaces per indent
                 size_t leading_spaces = line.find_first_not_of(" ");
                 size_t indent_level = leading_spaces / 2;
+                assert(list_stack.size() != 0);
+                size_t last_indent_level = list_stack.size() - 1;
                 if(indent_level > last_indent_level+1)
                     throw std::runtime_error("Invalid list indentation");
-                
-                std::string value = std::string(trimmed.substr(2));
-                glz::json_t* current = nullptr;
+
                 if(indent_level == last_indent_level) {
-                    current = list_stack.back();
+                    // no op
                 }
-                else if(indent_level > last_indent_level) {
-                    list_stack.back()->get<glz::json_t::array_t>().push_back(glz::json_t::array_t());
-                    current = &list_stack.back()->get<glz::json_t::array_t>().back();
+                else if(indent_level < last_indent_level) {
+                    list_stack.resize(indent_level + 1);
                 }
                 else {
-                    for(size_t i = 0; i < last_indent_level - indent_level; i++)
-                        list_stack.pop_back();
-                    current = list_stack.back();
+                    // assert(indent_level == last_indent_level + 1);
+                    auto current_back = list_stack.back();
+                    current_back->children.push_back({});
+                    list_stack.push_back(&current_back->children.back());
                 }
-                assert(current != nullptr);
+                assert(list_stack.size() != 0);
+                auto current = list_stack.back();
+
+                std::string value = std::string(trimmed.substr(2));
+                current->children.push_back(ListNode{.value = value});
                 consume_line();
-                current->get<glz::json_t::array_t>().push_back(value);
-                last_indent_level = indent_level;
+                list_stack.push_back(&current->children.back());
+
             }
 
             std::transform(key.begin(), key.end(), key.begin(), ::tolower); 
             if(altname_for_plaintext.contains(key))
                 key = "-";
-            parsed[key] = list_tree;
+            parsed[key] = root_node.children;
         }
         // HACK: There is an ambiguity here. Usually we treat lines with a colon as key-value pairs. ex:
         // name: Tom
@@ -669,14 +673,14 @@ glz::json_t MarkdownLikeParser::parseReply(const std::string& reply)
             if(!parsed.contains("-"))
                 parsed["-"] = trimmed;
             else
-                parsed["-"] = parsed["-"].get<std::string>() + "\n" + trimmed;
+                parsed["-"] = std::get<std::string>(parsed["-"]) + "\n" + trimmed;
         }
     }
     
     return parsed;
 }
 
-glz::json_t MarkdownListParser::parseReply(const std::string& reply)
+std::vector<std::string> MarkdownListParser::parseReply(const std::string& reply)
 {
     std::string_view remaining(reply);
     size_t last_remaining_size = -1;
@@ -715,7 +719,7 @@ glz::json_t MarkdownListParser::parseReply(const std::string& reply)
         }
     }
 
-    return to_json(res);
+    return res;
 }
 
 glz::json_t JsonParser::parseReply(const std::string& reply)
@@ -736,7 +740,7 @@ glz::json_t JsonParser::parseReply(const std::string& reply)
     return parsed;
 }
 
-glz::json_t PlaintextParser::parseReply(const std::string& reply)
+std::string PlaintextParser::parseReply(const std::string& reply)
 {
     return reply;
 }
@@ -759,9 +763,9 @@ static void jsonFixNumbers(glz::json_t& json)
     }
 }
 
-glz::json_t YamlParser::parseReply(const std::string& reply)
+YAML::Node YamlParser::parseReply(const std::string& reply)
 {
-    return internal::yaml2json(YAML::Load(reply));
+    return YAML::Load(reply);
 }
 
 std::string PromptTemplate::render() const

@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 #include <unordered_set>
+#include <yaml-cpp/node/node.h>
 
 namespace tllf
 {
@@ -206,11 +207,6 @@ struct VertexAIConnector : public LLM
     std::string api_key;
 };
 
-struct LanguageParser
-{
-    virtual glz::json_t parseReply(const std::string& reply) = 0;
-};
-
 /**
  * Parses a reply in a markdown-like format. (like. meaning it is not a full markdown parser)
  * For example:
@@ -229,33 +225,67 @@ struct LanguageParser
  * This is good enough for most simple use cases.
  * TODO: Make a formal specification for this format.
 */
-struct MarkdownLikeParser : public LanguageParser
+struct MarkdownLikeParser
 {
     MarkdownLikeParser() = default;
     MarkdownLikeParser(const std::set<std::string>& altname_for_plaintext) : altname_for_plaintext(altname_for_plaintext) {}
 
-    glz::json_t parseReply(const std::string& reply);
+    struct ListNode
+    {
+        std::string value;
+        std::vector<ListNode> children;
+
+        ListNode& operator[](size_t idx)
+        {
+            return children[idx];
+        }
+
+        const ListNode& operator[](size_t idx) const
+        {
+            return children[idx];
+        }
+    };
+
+    // using MarkdownLikeData = std::variant<std::string, std::vector<ListNode>>;
+    struct MarkdownLikeData : public std::variant<std::string, std::vector<ListNode>>
+    {
+        using std::variant<std::string, std::vector<ListNode>>::variant;
+
+        template <typename T>
+        T& get()
+        {
+            return std::get<T>(*this);
+        }
+
+        template <typename T>
+        const T& get() const
+        {
+            return std::get<T>(*this);
+        }
+    };
+
+    std::map<std::string, MarkdownLikeData> parseReply(const std::string& reply);
     std::set<std::string> altname_for_plaintext;
 };
 
-struct MarkdownListParser : public LanguageParser
+struct MarkdownListParser
 {
-    glz::json_t parseReply(const std::string& reply) override;
+    std::vector<std::string> parseReply(const std::string& reply);
 };
 
-struct JsonParser : public LanguageParser
+struct JsonParser
 {
-    glz::json_t parseReply(const std::string& reply) override;
+    glz::json_t parseReply(const std::string& reply);
 };
 
-struct PlaintextParser : public LanguageParser
+struct PlaintextParser
 {
-    glz::json_t parseReply(const std::string& reply) override;
+    std::string parseReply(const std::string& reply);
 };
 
-struct YamlParser : public LanguageParser
+struct YamlParser
 {
-    glz::json_t parseReply(const std::string& reply) override;
+    YAML::Node parseReply(const std::string& reply);
 };
 
 struct PromptTemplate
@@ -287,28 +317,6 @@ struct PromptTemplate
     std::string render() const;
 
     static std::unordered_set<std::string> extractVars(const std::string& prompt);
-};
-
-struct Chain
-{
-    Chatlog chatlog;
-    std::shared_ptr<tllf::LLM> llm;
-    std::shared_ptr<tllf::LanguageParser> parser;
-    std::shared_ptr<PromptTemplate> prompt;
-
-    Chain(std::shared_ptr<tllf::LLM> llm, std::shared_ptr<tllf::LanguageParser> parser, std::shared_ptr<PromptTemplate> prompt)
-        : llm(llm), parser(parser), prompt(prompt)
-    {
-        chatlog.push_back({prompt->render(), "system"});
-    }
-
-    drogon::Task<std::string> generate(std::string user_input, TextGenerationConfig config)
-    {
-        chatlog.push_back({user_input, "user"});
-        auto result = co_await llm->generate(chatlog, config);
-        chatlog.push_back({result, "bot"});
-        co_return result;
-    }
 };
 
 }

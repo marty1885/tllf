@@ -36,34 +36,60 @@ DROGON_TEST(PromptTemplate)
 DROGON_TEST(MarkdownLikeParser)
 {
     MarkdownLikeParser parser;
-    // auto parsed = parser.parseReply("**interests**:\n - music\n - sports\nTom is a good person");
-    // REQUIRE(parsed.contains("interests"));
-    // REQUIRE(parsed["interests"].holds<glz::json_t::array_t>());
-    // REQUIRE(parsed["interests"].get<glz::json_t::array_t>().size() == 2);
-    // REQUIRE(parsed["interests"][0].get<std::string>() == "music");
-    // REQUIRE(parsed["interests"][1].get<std::string>() == "sports");
-    // REQUIRE(parsed["-"].get<std::string>() == "Tom is a good person");
+    auto parsed = parser.parseReply("**interests**:\n - music\n - sports\nTom is a good person");
+    REQUIRE(parsed.contains("interests"));
+    auto node = std::get<std::vector<MarkdownLikeParser::ListNode>>(parsed["interests"]);
+    REQUIRE(node.size() == 2);
+    REQUIRE(node[0].value == "music");
+    REQUIRE(node[1].value == "sports");
+    REQUIRE(node[0].children.empty());
+    REQUIRE(node[1].children.empty());
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"].get<std::string>() == "Tom is a good person");
 
-    // parsed = parser.parseReply("Tom is a good person");
-    // REQUIRE(parsed.contains("-"));
-    // REQUIRE(parsed["-"].get<std::string>() == "Tom is a good person");
+    parsed = parser.parseReply("Tom is a good person");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"].get<std::string>() == "Tom is a good person");
 
-    auto parsed = parser.parseReply("Task:\n - buy milk");
+    parsed = parser.parseReply("Task:\n - buy milk\n - buy bread");
     REQUIRE(parsed.contains("task"));
-    REQUIRE(parsed["task"].holds<glz::json_t::array_t>());
-    REQUIRE(parsed["task"].get<glz::json_t::array_t>().size() == 1);
+    node = std::get<std::vector<MarkdownLikeParser::ListNode>>(parsed["task"]);
+    REQUIRE(node.size() == 2);
+    REQUIRE(node[0].value == "buy milk");
+    REQUIRE(node[1].value == "buy bread");
+    REQUIRE(node[0].children.empty());
+    REQUIRE(node[1].children.empty());
 
-    // parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.");
-    // REQUIRE(parsed.contains("-"));
-    // REQUIRE(parsed["-"].get<std::string>() == "I need to wake up 9:00 AM tomorrow.");
+    parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"].get<std::string>() == "I need to wake up 9:00 AM tomorrow.");
 
-    // parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
-    // REQUIRE(parsed.contains("-"));
-    // REQUIRE(parsed["-"].get<std::string>() == "I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
+    parsed = parser.parseReply("I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"].get<std::string>() == "I need to wake up 9:00 AM tomorrow.\nAnd I need to buy milk.");
 
-    // parsed = parser.parseReply("The book \"The Lord of the Rings: The Fellowship of the Ring\" is a good book.");
-    // REQUIRE(parsed.contains("-"));
-    // REQUIRE(parsed["-"].get<std::string>() == "The book \"The Lord of the Rings: The Fellowship of the Ring\" is a good book.");
+    parsed = parser.parseReply("The book \"The Lord of the Rings: The Fellowship of the Ring\" is a good book.");
+    REQUIRE(parsed.contains("-"));
+    REQUIRE(parsed["-"].get<std::string>() == "The book \"The Lord of the Rings: The Fellowship of the Ring\" is a good book.");
+
+    parsed = parser.parseReply(R"(
+steps:
+- Step 1:
+  - be careful
+  - be patient
+- Step 2:
+  - Profit
+)");
+    REQUIRE(parsed.contains("steps"));
+    node = std::get<std::vector<MarkdownLikeParser::ListNode>>(parsed["steps"]);
+    REQUIRE(node.size() == 2);
+    REQUIRE(node[0].value == "Step 1:");
+    REQUIRE(node[1].value == "Step 2:");
+    REQUIRE(node[0].children.size() == 2);
+    REQUIRE(node[1].children.size() == 1);
+    REQUIRE(node[0].children[0].value == "be careful");
+    REQUIRE(node[0].children[1].value == "be patient");
+    REQUIRE(node[1].children[0].value == "Profit");
 }
 
 DROGON_TEST(JsonParser)
