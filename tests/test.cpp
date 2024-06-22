@@ -1,6 +1,8 @@
 #include <drogon/drogon_test.h>
 #include <glaze/core/context.hpp>
 #include <glaze/json/json_t.hpp>
+#include <glaze/json/write.hpp>
+#include "tllf/parsers.hpp"
 #include "tllf/tllf.hpp"
 #include "tllf/tool.hpp"
 
@@ -163,6 +165,19 @@ DROGON_TEST(yaml2json)
 
 }
 
+DROGON_TEST(mdlist2json)
+{
+    std::string str = R"(
+steps:
+- online_search:
+   - query: cat
+   - page: 2
+)";
+
+    auto parsed = MarkdownLikeParser().parseReply(str);
+    auto json = tllf::to_json(parsed["steps"].get<std::vector<MarkdownLikeParser::ListNode>>()[0]);
+    REQUIRE(glz::write_json(json) == R"({"online_search":{"page":2,"query":"cat"}})");
+}
 int main(int argc, char** argv)
 {
     return drogon::test::run(argc, argv);
