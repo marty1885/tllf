@@ -158,10 +158,8 @@ struct Tool
     std::function<drogon::Task<std::string>(glz::json_t)> func;
     ToolDoc doc;
 
-    drogon::Task<std::string> operator()(glz::json_t json) { return func(std::move(json)); }
-
     template <typename ... Args>
-    std::string generateInvokeExample(Args&&... args)
+    glz::json_t make_json(Args&&... args)
     {
         constexpr size_t num_args = sizeof...(Args);
         if(num_args != doc.params.size())
@@ -185,6 +183,23 @@ struct Tool
         };
 
         std::apply([&](auto&... args) { (apply_func(args), ...); }, std::forward_as_tuple(args...));
+        return json;
+    }
+
+    template <typename ... Args>
+    drogon::Task<std::string> operator()(Args&&... args)
+    {
+        constexpr size_t num_args = sizeof...(Args);
+        if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, glz::json_t>)
+            return func(std::forward<glz::json_t>(args)...);
+        else
+            return func(make_json(std::forward<Args>(args)...));
+    }
+
+    template <typename ... Args>
+    std::string generateInvokeExample(Args&&... args)
+    {
+        auto json = make_json(std::forward<Args>(args)...);
         YAML::Node yaml;
         yaml[name] = internal::json2yaml(json);
         YAML::Emitter emitter;
@@ -226,6 +241,17 @@ struct Toolset : public std::vector<Tool>
         return str;
     }
 
+    std::string generateToolListWithBrief()
+    {
+        std::string str;
+        for(auto& tool : *this) {
+            str += "- " + tool.name + ": " + tool.doc.brief_ + "\n";
+        }
+        if(str.size() != 0 && str.back() == '\n')
+            str.pop_back();
+        return str;
+    }
+
     std::string generateToolDescription()
     {
         // Can't use YAML here because we want syntax closer to Markdown
@@ -239,6 +265,24 @@ struct Toolset : public std::vector<Tool>
         if(str.size() != 0 && str.back() == '\n')
             str.pop_back();
         return str;
+    }
+
+    bool contains(const std::string& name)
+    {
+        return std::any_of(begin(), end(), [&](const Tool& tool) { return tool.name == name; });
+    }
+
+    Tool& operator[](const std::string& name)
+    {
+        auto it = std::find_if(begin(), end(), [&](const Tool& tool) { return tool.name == name; });
+        if(it == end())
+            throw std::runtime_error("Tool " + name + " not found");
+        return *it;
+    }
+
+    const Tool& operator[](const std::string& name) const
+    {
+        return const_cast<const Tool&>(static_cast<const Toolset&>(*this)[name]);
     }
 };
 

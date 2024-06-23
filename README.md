@@ -2,7 +2,7 @@
 
 Lightweight C++ framework for building applications with Large Language Models. Currently it is a pile of glue bridging language model services into C++.
 
-This is work in progress software.
+This is work in progress software. A lot of ideas comes from LangChain. Not it is not a 1 to 1 copy. I'm adding and modifying things to fit my needs.
 
 Features:
 
