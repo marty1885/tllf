@@ -7,6 +7,7 @@
 #include "tllf/parsers.hpp"
 #include "tllf/tllf.hpp"
 #include "tllf/tool.hpp"
+#include <optional>
 
 using namespace tllf;
 
@@ -190,6 +191,14 @@ tllf::ToolResult noop_tool(std::string s)
 }
 
 
+tllf::ToolResult optional_tool(std::optional<std::string> s)
+{
+    TLLF_DOC("noop")
+        .BRIEF("Returns the same thing in it is given.")
+        .PARAM(s, "The string to be returned");
+    co_return s.value_or("The string is not given");
+}
+
 DROGON_TEST(tool)
 {
     auto n = [TEST_CTX]()->drogon::AsyncTask {
@@ -213,6 +222,18 @@ DROGON_TEST(tool)
         co_await toolize([](std::string s) { return noop_tool(s); });
         // function pointer
         co_await toolize(&noop_tool);
+    };
+
+    auto m = [TEST_CTX]()->drogon::AsyncTask {
+        auto f = co_await toolize(optional_tool);
+        auto doc = co_await getToolDoc(optional_tool);
+
+        auto res = co_await f(glz::json_t());
+        CO_REQUIRE(res == "The string is not given");
+        res = co_await f("Hello");
+        CO_REQUIRE(res == "Hello");
+        res = co_await f(glz::json_t({{"s", "Hello"}}));
+        CO_REQUIRE(res == "Hello");
     };
 }
 

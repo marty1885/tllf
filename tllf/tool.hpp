@@ -92,7 +92,7 @@ void extract_from_json(T& val, const std::vector<std::string> names, const glz::
         std::string str = glz::write_json(json[names[idx]]);
         auto err = glz::read_json(val, str);
         if(err)
-            throw std::runtime_error("Failed to read json: " + err.message());
+            throw std::runtime_error("Failed to read json. ec: " + std::to_string(static_cast<int>(err)));
     }
     idx++;
 }
