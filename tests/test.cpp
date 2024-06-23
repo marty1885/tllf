@@ -1,5 +1,6 @@
 #include <drogon/drogon_test.h>
 #include <drogon/utils/coroutine.h>
+#include <functional>
 #include <glaze/core/context.hpp>
 #include <glaze/json/json_t.hpp>
 #include <glaze/json/write.hpp>
@@ -204,6 +205,14 @@ DROGON_TEST(tool)
         invoke_data["s"] = "Hello!";
         auto res = co_await f(invoke_data);
         CO_REQUIRE(res == "Hello!");
+
+        // Make sure these also compiles
+        // std::function
+        co_await toolize(std::function(noop_tool));
+        // lambda
+        co_await toolize([](std::string s) { return noop_tool(s); });
+        // function pointer
+        co_await toolize(&noop_tool);
     };
 }
 

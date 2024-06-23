@@ -35,9 +35,7 @@ struct ExtractPack
 };
 
 template<typename T>
-struct FunctionTrait {
-    constexpr static bool ok = false;
-};
+struct FunctionTrait;
 
 template <typename R, typename... Args>
 struct FunctionTrait<R(Args...)>
@@ -48,6 +46,27 @@ struct FunctionTrait<R(Args...)>
     template <size_t N>
     using ArgType = typename ExtractPack<Args...>::template Type<N>;
     using ArgTuple = std::tuple<Args...>;
+    using Signature = R(Args...);
+};
+
+template <typename R, typename... Args>
+struct FunctionTrait<R(*)(Args...)> : public FunctionTrait<R(Args...)>
+{
+};
+
+template <typename Class, typename R, typename... Args>
+struct FunctionTrait<R (Class::*)(Args...)> : public FunctionTrait<R(Args...)>
+{
+};
+
+template <typename Class, typename R, typename... Args>
+struct FunctionTrait<R (Class::*)(Args...) const> : public FunctionTrait<R(Args...)>
+{
+};
+
+template <typename Function>
+struct FunctionTrait : public FunctionTrait<decltype(&Function::operator())>
+{
 };
 
 struct ParamInfo
