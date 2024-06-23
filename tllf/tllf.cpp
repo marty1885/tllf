@@ -144,6 +144,21 @@ struct glz::meta<ChatEntry>
     );
 };
 
+std::string Chatlog::to_json_string() const
+{
+    return glz::write_json(*this);
+}
+
+glz::json_t Chatlog::to_json() const
+{
+    std::string json = to_json_string();
+    glz::json_t res;
+    auto ec = glz::read_json(json, res);
+    if(!ec)
+        return res;
+    throw std::runtime_error("Failed to convert Chatlog to json: " + std::to_string(ec));
+}
+
 namespace tllf
 {
 

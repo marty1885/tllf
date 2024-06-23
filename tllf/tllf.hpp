@@ -7,6 +7,7 @@
 #include <drogon/HttpClient.h>
 #include <drogon/HttpTypes.h>
 #include <exception>
+#include <glaze/json/json_t.hpp>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -109,6 +110,9 @@ struct Chatlog : public std::vector<ChatEntry>
     {
         push_back(ChatEntry{.content = parts, .role = role});
     }
+
+    std::string to_json_string() const;
+    glz::json_t to_json() const;
 };
 
 std::string to_string(const Chatlog& chatlog);

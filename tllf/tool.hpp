@@ -230,7 +230,9 @@ struct Tool
 
 struct Toolset : public std::vector<Tool>
 {
-    std::string generateToolList()
+    Toolset(std::initializer_list<Tool> tools) : std::vector<Tool>(tools) {}
+
+    std::string generateToolList() const
     {
         std::string str;
         for(auto& tool : *this) {
@@ -241,7 +243,7 @@ struct Toolset : public std::vector<Tool>
         return str;
     }
 
-    std::string generateToolListWithBrief()
+    std::string generateToolListWithBrief() const
     {
         std::string str;
         for(auto& tool : *this) {
@@ -252,7 +254,7 @@ struct Toolset : public std::vector<Tool>
         return str;
     }
 
-    std::string generateToolDescription()
+    std::string generateToolDescription() const
     {
         // Can't use YAML here because we want syntax closer to Markdown
         std::string str;
