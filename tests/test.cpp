@@ -42,7 +42,7 @@ DROGON_TEST(MarkdownLikeParser)
     MarkdownLikeParser parser;
     auto parsed = parser.parseReply("**interests**:\n - music\n - sports\nTom is a good person");
     REQUIRE(parsed.contains("interests"));
-    auto node = std::get<std::vector<MarkdownLikeParser::ListNode>>(parsed["interests"]);
+    auto node = std::get<MarkDownListNodes>(parsed["interests"]);
     REQUIRE(node.size() == 2);
     REQUIRE(node[0].value == "music");
     REQUIRE(node[1].value == "sports");
@@ -57,7 +57,7 @@ DROGON_TEST(MarkdownLikeParser)
 
     parsed = parser.parseReply("Task:\n - buy milk\n - buy bread");
     REQUIRE(parsed.contains("task"));
-    node = std::get<std::vector<MarkdownLikeParser::ListNode>>(parsed["task"]);
+    node = std::get<MarkDownListNodes>(parsed["task"]);
     REQUIRE(node.size() == 2);
     REQUIRE(node[0].value == "buy milk");
     REQUIRE(node[1].value == "buy bread");
@@ -85,7 +85,7 @@ steps:
   - Profit
 )");
     REQUIRE(parsed.contains("steps"));
-    node = std::get<std::vector<MarkdownLikeParser::ListNode>>(parsed["steps"]);
+    node = std::get<MarkDownListNodes>(parsed["steps"]);
     REQUIRE(node.size() == 2);
     REQUIRE(node[0].value == "Step 1:");
     REQUIRE(node[1].value == "Step 2:");
@@ -177,7 +177,7 @@ steps:
 )";
 
     auto parsed = MarkdownLikeParser().parseReply(str);
-    auto json = tllf::to_json(parsed["steps"].get<std::vector<MarkdownLikeParser::ListNode>>()[0]);
+    auto json = tllf::to_json(parsed["steps"].get<MarkDownListNodes>()[0]);
     REQUIRE(glz::write_json(json) == R"({"online_search":{"page":2,"query":"cat"}})");
 }
 

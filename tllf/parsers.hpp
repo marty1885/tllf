@@ -21,13 +21,10 @@ namespace tllf
  * Other interests are not important.
  *
  * Will be parsed as:
- * {
- *     "interest": ["music", "sports"],
- *     "-": "Other interests are not important."
- * }
+ * parsed["-"] = "Other interests are not important."
+ * parsed["interest"] = MarkDownListNodes{ListNods{"music"}, ListNods{"sports"}}
  *
  * This is good enough for most simple use cases.
- * TODO: Make a formal specification for this format.
 */
 struct MarkdownLikeParser
 {
@@ -50,7 +47,6 @@ struct MarkdownLikeParser
         }
     };
 
-    // using MarkdownLikeData = std::variant<std::string, std::vector<ListNode>>;
     struct MarkdownLikeData : public std::variant<std::string, std::vector<ListNode>>
     {
         using std::variant<std::string, std::vector<ListNode>>::variant;
@@ -71,6 +67,7 @@ struct MarkdownLikeParser
     std::map<std::string, MarkdownLikeData> parseReply(const std::string& reply);
     std::set<std::string> altname_for_plaintext;
 };
+using MarkDownListNodes = std::vector<MarkdownLikeParser::ListNode>;
 
 glz::json_t to_json(const MarkdownLikeParser::ListNode& node);
 
