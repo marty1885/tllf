@@ -231,6 +231,7 @@ struct Tool
 struct Toolset : public std::vector<Tool>
 {
     Toolset(std::initializer_list<Tool> tools) : std::vector<Tool>(tools) {}
+    Toolset() = default;
 
     std::string generateToolList() const
     {

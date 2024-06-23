@@ -113,6 +113,8 @@ struct Chatlog : public std::vector<ChatEntry>
 
     std::string to_json_string() const;
     glz::json_t to_json() const;
+
+    static Chatlog from_json_string(const std::string& str);
 };
 
 std::string to_string(const Chatlog& chatlog);

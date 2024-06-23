@@ -182,6 +182,21 @@ steps:
     REQUIRE(glz::write_json(json) == R"({"online_search":{"page":2,"query":"cat"}})");
 }
 
+DROGON_TEST(ChatlogSerDes)
+{
+    Chatlog log;
+    log.push_back("Hello", "user");
+    log.push_back("Hi", "assistant");
+    log.push_back("How are you?", "user");
+    log.push_back("I'm fine", "assistant");
+
+    std::string serialized = log.to_json_string();
+    std::cout << serialized << std::endl;
+    Chatlog deserialized;
+    REQUIRE_NOTHROW(deserialized = Chatlog::from_json_string(serialized));
+    REQUIRE(deserialized.size() == 4);
+}
+
 tllf::ToolResult noop_tool(std::string s)
 {
     TLLF_DOC("noop")

@@ -104,7 +104,8 @@ glz::json_t ChatEntry::Content::write_data() const
 
 void ChatEntry::Content::read_data(const std::string& data)
 {
-    throw std::runtime_error("ChatEntry::Content is read-only");
+    // TODO: Support reading ListOfParts
+    *this = data;
 }
 
 template <>
@@ -118,21 +119,29 @@ struct glz::meta<ChatEntry::Content>
 
 glz::json_t ChatEntry::write_content() const
 {
-    glz::json_t json;
     glz::json_t c = content.write_data();
     if(c.holds<std::string>())
-        json = c.get<std::string>();
+        return c.get<std::string>();
     else if(c.holds<glz::json_t::array_t>())
-        json = c.get<glz::json_t::array_t>();
+        return c.get<glz::json_t::array_t>();
     else
         throw std::runtime_error("Unexpected data while serializing conversaion content");
-    return json;
 }
 
 void ChatEntry::read_data(const std::string& data)
 {
-    throw std::runtime_error("ChatEntry is read-only");
+    content.read_data(data);
 }
+
+Chatlog Chatlog::from_json_string(const std::string& str)
+{
+    Chatlog res;
+    auto err = glz::read_json(res, str);
+    if(err)
+        throw std::runtime_error("Failed to parse Chatlog: " + std::to_string(err));
+    return res;
+}
+
 
 template <>
 struct glz::meta<ChatEntry>
@@ -153,7 +162,7 @@ glz::json_t Chatlog::to_json() const
 {
     std::string json = to_json_string();
     glz::json_t res;
-    auto ec = glz::read_json(json, res);
+    auto ec = glz::read_json(res, json);
     if(!ec)
         return res;
     throw std::runtime_error("Failed to convert Chatlog to json: " + std::to_string(ec));
