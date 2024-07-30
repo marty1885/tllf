@@ -72,9 +72,6 @@ struct Url
         return false;
     }
 
-    // Functions to please Glaze
-    void from(const std::string& str);
-
 protected:
     std::string protocol_;
     std::string host_;

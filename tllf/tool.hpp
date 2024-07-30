@@ -1,13 +1,11 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <drogon/utils/coroutine.h>
-#include <glaze/core/write.hpp>
-#include <glaze/json/json_t.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <glaze/glaze.hpp>
 #include <tuple>
 #include <type_traits>
 #include <variant>
@@ -17,6 +15,8 @@
 #include <yaml-cpp/emittermanip.h>
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
+
+#include <nlohmann/json.hpp>
 
 #define TLLF_DOC(name) if(::tllf::g_local_return_doc) co_return ::tllf::ToolDoc::make(name)
 #define BRIEF(x) brief(x)
@@ -76,7 +76,7 @@ struct ParamInfo
 };
 
 template <typename T>
-void extract_from_json(T& val, const std::vector<std::string> names, const glz::json_t& json, size_t& idx)
+void extract_from_json(T& val, const std::vector<std::string> names, const nlohmann::json& json, size_t& idx)
 {
     using Type = std::remove_cvref_t<T>;
     if constexpr(std::is_integral_v<T> || std::is_floating_point_v<T>)
@@ -85,20 +85,22 @@ void extract_from_json(T& val, const std::vector<std::string> names, const glz::
         val = json[names[idx]].template get<std::string>();
     else if constexpr(std::is_same_v<Type, bool>)
         val = json[names[idx]].template get<bool>();
-    else if constexpr(std::is_same_v<Type, glz::json_t>)
+    else if constexpr(std::is_same_v<Type, nlohmann::json>)
         val = json[names[idx]];
     else {
-        // Yeah.. not the brightest idea to use glz::write_json and glz::read_json
-        std::string str = glz::write_json(json[names[idx]]).value();
-        auto err = glz::read_json(val, str);
-        if(err)
-            throw std::runtime_error("Failed to read json. ec: " + std::to_string(static_cast<int>(err)));
+        // TODO: Handle this
     }
     idx++;
 }
 
 } // namespace internal
 extern thread_local bool g_local_return_doc;
+
+template <template <typename...> class T, typename U>
+struct is_specialization_of: std::false_type {};
+
+template <template <typename...> class T, typename... Us>
+struct is_specialization_of<T, T<Us...>>: std::true_type {};
 
 struct ToolDoc
 {
@@ -112,9 +114,23 @@ struct ToolDoc
         (void)ptr;
         using Type = std::remove_cvref_t<T>;
         auto validator = [](const std::string& str) -> bool {
-            Type val;
-            auto err = glz::read_json(val, str);
-            return err == glz::error_code::none;
+            try {
+                if constexpr(is_specialization_of<std::optional, Type>::value) {
+                    using InnerType = std::remove_cvref_t<typename Type::value_type>;
+                    if(str == "null" || str == "NULL" || str == "")
+                        return true;
+                    nlohmann::json json = nlohmann::json::parse(str);
+                    json.get<InnerType>();
+                }
+                else {
+                    nlohmann::json json = nlohmann::json::parse(str);
+                    json.get<Type>();
+                }
+            }
+            catch(...) {
+                return false;
+            }
+            return true;
         };
         params.push_back({name, internal::ParamInfo{desc, validator}});
         return *this;
@@ -155,30 +171,25 @@ drogon::Task<ToolDoc> getToolDoc(Func&& func)
 struct Tool
 {
     std::string name;
-    std::function<drogon::Task<std::string>(glz::json_t)> func;
+    std::function<drogon::Task<std::string>(nlohmann::json)> func;
     ToolDoc doc;
 
     template <typename ... Args>
-    glz::json_t make_json(Args&&... args)
+    nlohmann::json make_json(Args&&... args)
     {
         constexpr size_t num_args = sizeof...(Args);
         if(num_args != doc.params.size())
             throw std::runtime_error("Argument size does not match tool params");
 
-        glz::json_t json;
+        nlohmann::json json;
         size_t idx = 0;
 
         auto apply_func = [&](auto& val) {
-            std::string str = glz::write_json(val).value();
+            std::string str = nlohmann::json(val).dump();
             if(!doc.params[idx].second.validator(str))
                 // TODO: This error message is confusing. We should provide a better error message
                 throw std::runtime_error("Parameter " + doc.params[idx].first + " does not seem to be serializable from example");
-            
-            glz::json_t val_json;
-            auto err = glz::read_json(val_json, str);
-            if(err)
-                throw std::runtime_error("Failed to read json during example generation. This should not happen");
-            json[doc.params[idx].first] = val_json;
+            json[doc.params[idx].first] = val;
             idx++;
         };
 
@@ -190,8 +201,8 @@ struct Tool
     drogon::Task<std::string> operator()(Args&&... args)
     {
         constexpr size_t num_args = sizeof...(Args);
-        if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, glz::json_t>)
-            return func(std::forward<glz::json_t>(args)...);
+        if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, nlohmann::json>)
+            return func(std::forward<nlohmann::json>(args)...);
         else
             return func(make_json(std::forward<Args>(args)...));
     }
@@ -307,7 +318,7 @@ drogon::Task<Tool> toolize(Func&& func)
         param_names[i] = doc.params[i].first;
     }
 
-    auto functor = [func = std::move(func), param_names = std::move(param_names)](glz::json_t invoke_data) -> drogon::Task<std::string> {
+    auto functor = [func = std::move(func), param_names = std::move(param_names)](nlohmann::json invoke_data) -> drogon::Task<std::string> {
         using FuncType = std::remove_cvref_t<Func>;
         using Traits = tllf::internal::FunctionTrait<FuncType>;
         using InvokeTuple = Traits::ArgTuple;

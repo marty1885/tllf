@@ -1,12 +1,11 @@
 #pragma once
-#include <glaze/json/json_t.hpp>
 #include <string>
 #include <map>
 #include <vector>
 #include <variant>
 #include <set>
 
-#include <glaze/json.hpp>
+#include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
 
 namespace tllf
@@ -69,7 +68,13 @@ struct MarkdownLikeParser
 };
 using MarkDownListNodes = std::vector<MarkdownLikeParser::ListNode>;
 
-glz::json_t to_json(const MarkdownLikeParser::ListNode& node);
+void to_json(nlohmann::json& json, const MarkdownLikeParser::ListNode& node);
+inline nlohmann::json to_json(const MarkdownLikeParser::ListNode& node)
+{
+    nlohmann::json json;
+    to_json(json, node);
+    return json;
+}
 
 struct MarkdownListParser
 {
@@ -78,7 +83,7 @@ struct MarkdownListParser
 
 struct JsonParser
 {
-    glz::json_t parseReply(const std::string& reply);
+    nlohmann::json parseReply(const std::string& reply);
 };
 
 struct PlaintextParser

@@ -1,6 +1,7 @@
 #include "parsers.hpp"
 #include "utils.hpp"
 #include <cstddef>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 
 using namespace tllf;
@@ -124,7 +125,7 @@ std::map<std::string, MarkdownLikeParser::MarkdownLikeData> MarkdownLikeParser::
     return parsed;
 }
 
-static void to_json_internal(const MarkdownLikeParser::ListNode& node, glz::json_t& json)
+static void to_json_internal(const MarkdownLikeParser::ListNode& node, nlohmann::json& json)
 {
     auto& value = node.value;
     if(value.ends_with(":") || value.find_last_of(":") == value.size() - 1) {
@@ -132,7 +133,7 @@ static void to_json_internal(const MarkdownLikeParser::ListNode& node, glz::json
             throw std::runtime_error("Invalid node. Has no value and no children");
         }
         else {
-            glz::json_t child_json = glz::json_t::object_t{};
+            nlohmann::json child_json;
             for(auto& child : node.children) {
                 to_json_internal(child, child_json);
             }
@@ -159,11 +160,9 @@ static void to_json_internal(const MarkdownLikeParser::ListNode& node, glz::json
     }
 }
 
-glz::json_t tllf::to_json(const MarkdownLikeParser::ListNode& node)
+void tllf::to_json(nlohmann::json& json, const MarkdownLikeParser::ListNode& node)
 {
-    glz::json_t arr = glz::json_t::object_t{};
-    to_json_internal(node, arr);
-    return arr;
+    to_json_internal(node, json);
 }
 
 std::vector<std::string> MarkdownListParser::parseReply(const std::string& reply)
@@ -208,7 +207,7 @@ std::vector<std::string> MarkdownListParser::parseReply(const std::string& reply
     return res;
 }
 
-glz::json_t JsonParser::parseReply(const std::string& reply)
+nlohmann::json JsonParser::parseReply(const std::string& reply)
 {
     std::string_view remaining(reply);
     if(remaining.starts_with("```json"))
@@ -219,34 +218,12 @@ glz::json_t JsonParser::parseReply(const std::string& reply)
         remaining = remaining.substr(0, remaining.size() - 3);
     remaining = utils::trim(remaining, " \n\r\t");
 
-    glz::json_t parsed;
-    auto err = glz::read_json(parsed, remaining);
-    if(err)
-        throw std::runtime_error("Error parsing JSON: " + std::string(err.includer_error));
-    return parsed;
+    return nlohmann::json::parse(remaining);
 }
 
 std::string PlaintextParser::parseReply(const std::string& reply)
 {
     return reply;
-}
-
-static void jsonFixNumbers(glz::json_t& json)
-{
-    if(json.holds<std::string>()) {
-        size_t pos = 0;
-        double n = std::stod(json.get<std::string>(), &pos);
-        if(pos == json.get<std::string>().size())
-            json = n;
-    }
-    else if(json.holds<glz::json_t::array_t>()) {
-        for(auto& elem : json.get<glz::json_t::array_t>())
-            jsonFixNumbers(elem);
-    }
-    else if(json.holds<glz::json_t::object_t>()) {
-        for(auto& [key, elem] : json.get<glz::json_t::object_t>())
-            jsonFixNumbers(elem);
-    }
 }
 
 YAML::Node YamlParser::parseReply(const std::string& reply)

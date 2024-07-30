@@ -3,12 +3,8 @@
 #include <drogon/HttpTypes.h>
 #include <drogon/utils/Utilities.h>
 #include <drogon/utils/coroutine.h>
-#include <glaze/core/common.hpp>
-#include <glaze/core/meta.hpp>
-#include <glaze/core/opts.hpp>
-#include <glaze/json/json_t.hpp>
-#include <glaze/json/read.hpp>
-#include <glaze/json/write.hpp>
+#include <nlohmann/json.hpp>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -28,145 +24,6 @@
 
 using namespace tllf;
 using namespace drogon;
-
-static constexpr glz::opts laxed_opt = {.error_on_unknown_keys=false}; 
-
-template<>
-struct glz::meta<ImageBlob>
-{
-    using T = ImageBlob;
-    static constexpr auto value = object(
-        "url", custom<&T::read_data, &T::write_data>
-    );
-};
-
-template<>
-struct glz::meta<Url>
-{
-    using T = Url;
-    static constexpr auto value = object(
-        "url", custom<&T::from, &T::str>
-    );
-};
-
-template <>
-struct glz::meta<Text>
-{
-    static constexpr auto value = object(
-        "text", &Text::text
-    );
-};
-
-static glz::json_t to_json(const ChatEntry::Part& data)
-{
-    glz::json_t json;
-    std::visit([&](auto&& arg) -> void {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr(std::is_same_v<T, std::string>) {
-            json["type"] = "text";
-            json["text"] = arg;
-        }
-        else if constexpr(std::is_same_v<T, Url>) {
-            json["type"] = "image_url";
-            json["image_url"]["url"] = arg.str();
-        }
-        else if constexpr(std::is_same_v<T, ImageBlob>) {
-            json["type"] = "image_url";
-            json["image_url"]["url"] = arg.write_data();
-        }
-        else if constexpr(std::is_same_v<T, ImageBlob>) {
-            return arg.write_data();
-        }
-    }, data);
-    return json;
-}
-
-glz::json_t ChatEntry::Content::write_data() const
-{
-    auto& data = *this;
-    glz::json_t json;
-    std::visit([&](auto&& arg) -> void {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr(std::is_same_v<T, std::string>) {
-            json = arg;
-        }
-        else if constexpr(std::is_same_v<T, ListOfParts>) {
-            glz::json_t::array_t arr;
-            arr.reserve(arg.size());
-            for(auto& part : arg) {
-                arr.push_back(::to_json(part));
-            }
-            json = arr;
-        }
-    }, data);
-    return json;
-}
-
-void ChatEntry::Content::read_data(const std::string& data)
-{
-    // TODO: Support reading ListOfParts
-    *this = data;
-}
-
-template <>
-struct glz::meta<ChatEntry::Content>
-{
-   using T = ChatEntry::Content;
-    static constexpr auto value = object(
-        "content", custom<&T::read_data, &T::write_data>
-    );
-};
-
-glz::json_t ChatEntry::write_content() const
-{
-    glz::json_t c = content.write_data();
-    if(c.holds<std::string>())
-        return c.get<std::string>();
-    else if(c.holds<glz::json_t::array_t>())
-        return c.get<glz::json_t::array_t>();
-    else
-        throw std::runtime_error("Unexpected data while serializing conversaion content");
-}
-
-void ChatEntry::read_data(const std::string& data)
-{
-    content.read_data(data);
-}
-
-Chatlog Chatlog::from_json_string(const std::string& str)
-{
-    Chatlog res;
-    auto err = glz::read_json(res, str);
-    if(err)
-        throw std::runtime_error("Failed to parse Chatlog: " + std::to_string(err));
-    return res;
-}
-
-
-template <>
-struct glz::meta<ChatEntry>
-{
-   using T = ChatEntry;
-    static constexpr auto value = object(
-        "content", custom<&T::read_data, &T::write_content>,
-        "role", &T::role
-    );
-};
-
-std::string Chatlog::to_json_string() const
-{
-    return glz::write_json(*this).value();
-}
-
-glz::json_t Chatlog::to_json() const
-{
-    std::string json = to_json_string();
-    glz::json_t res;
-    auto ec = glz::read_json(res, json);
-    if(!ec)
-        return res;
-    throw std::runtime_error("Failed to convert Chatlog to json: " + std::to_string(ec));
-}
 
 namespace tllf
 {
@@ -191,30 +48,6 @@ std::string env(const std::string& key)
     if(val == nullptr) throw std::runtime_error("Environment variable " + key + " not set");
     return val;
 }
-}
-
-std::string ImageBlob::write_data() const
-{
-    std::string_view sv(reinterpret_cast<const char*>(data.data()), data.size());
-    return "data:" + mime + ";base64," + drogon::utils::base64Encode(sv);
-}
-
-void ImageBlob::read_data(const std::string& value)
-{
-    std::string_view remaining = value;
-    if(remaining.starts_with("data:")) {
-        remaining = remaining.substr(5);
-    }
-    
-    size_t mime_end = remaining.find(';');
-    if(mime_end == std::string::npos)
-        throw std::runtime_error("Invalid data URL: " + value);
-    mime = std::string(remaining.substr(0, mime_end));
-
-    size_t base64_start = remaining.find(',');
-    if(base64_start == std::string::npos)
-        throw std::runtime_error("Invalid data URL: " + value);
-    data = drogon::utils::base64DecodeToVector(remaining.substr(base64_start + 1));
 }
 
 ImageBlob ImageBlob::fromFile(const std::string& path, std::string mime) {
@@ -297,6 +130,103 @@ struct OpenAIError
     std::string error;
 };
 
+void to_json(nlohmann::json& j, const OpenAIError& d)
+{
+    j["error"] = d.error;
+}
+
+void from_json(const nlohmann::json& j, OpenAIError& d)
+{
+    j.at("error").get_to(d.error);
+}
+
+void to_json(nlohmann::json& j, const OpenAIResponse::Choice::Message& d)
+{
+    j["content"] = d.content;
+}
+
+void from_json(const nlohmann::json& j, OpenAIResponse::Choice::Message& d)
+{
+    j.at("content").get_to(d.content);
+}
+
+void to_json(nlohmann::json& j, const OpenAIResponse::Choice& d)
+{
+    j["message"] = d.message;
+}
+
+void from_json(const nlohmann::json& j, OpenAIResponse::Choice& d)
+{
+    j.at("message").get_to(d.message);
+}
+
+void to_json(nlohmann::json& j, const OpenAIResponse& d)
+{
+    j["choices"] = d.choices;
+}
+
+void from_json(const nlohmann::json& j, OpenAIResponse& d)
+{
+    j.at("choices").get_to(d.choices);
+}
+
+namespace tllf
+{
+
+void to_json(nlohmann::json& j, const ChatEntry& d)
+{
+    j["role"] = d.role;
+    std::visit([&](auto&& c) {
+        using T = std::decay_t<decltype(c)>;
+        if constexpr(std::is_same_v<T, std::string>)
+            j["content"] = c;
+        else {
+            static_assert(std::is_same_v<T, ChatEntry::ListOfParts>);
+            // j["content"] = c; // TODO: Implement this
+            abort();
+        }
+    }, d.content);
+}
+
+void from_json(const nlohmann::json& j, ChatEntry& d)
+{
+    j.at("role").get_to(d.role);
+    if(j.contains("content")) {
+        if(j["content"].is_string())
+            d.content = j["content"].get<std::string>();
+        else {
+            // j.at("content").get_to(d.content); // TODO: Implement this
+            abort();
+        }
+    }
+}
+
+void to_json(nlohmann::json& j, const std::vector<ChatEntry>& d)
+{
+    j = nlohmann::json::array();
+    for(auto& entry : d) {
+        nlohmann::json e;
+        to_json(e, entry);
+        j.push_back(e);
+    }
+
+}
+
+}
+
+void to_json(nlohmann::json& j, const OpenAIDataBody& d)
+{
+    j["model"] = d.model;
+    // j["messages"] = d.messages;
+    tllf::to_json(j["messages"], d.messages);
+    if(d.max_tokens.has_value()) j["max_tokens"] = d.max_tokens.value();
+    if(d.temperature.has_value()) j["temperature"] = d.temperature.value();
+    if(d.top_p.has_value()) j["top_p"] = d.top_p.value();
+    if(d.frequency_penalty.has_value()) j["frequency_penalty"] = d.frequency_penalty.value();
+    if(d.presence_penalty.has_value()) j["presence_penalty"] = d.presence_penalty.value();
+    if(d.stop_sequence.has_value()) j["stop_sequence"] = d.stop_sequence.value();
+}
+
 OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::string& hoststr, const std::string& api_key)
     : model_name(model_name), api_key(api_key)
 {
@@ -357,7 +287,7 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
         .stop_sequence = config.stop_sequence
     };
 
-    std::string body_str = glz::write_json(body).value();
+    std::string body_str = nlohmann::json(body).dump();
     LOG_DEBUG << "Request: " << body_str;
     req->setBody(body_str);
     req->setContentTypeCode(drogon::CT_APPLICATION_JSON); 
@@ -373,16 +303,11 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     }
     else if(resp->statusCode() != drogon::k200OK) {
         OpenAIError error;
-        auto err = glz::read<laxed_opt>(error, resp->body());
-        if(err || error.error.empty())
-            throw std::runtime_error("Request failed. status code: " + std::to_string(resp->statusCode()));
+        auto err = nlohmann::json::parse(resp->body()).template get<OpenAIError>();
         throw std::runtime_error(error.error);
     }
 
-    OpenAIResponse response;
-    auto error = glz::read<laxed_opt>(response, resp->body());
-    if(error)
-        throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
+    OpenAIResponse response = nlohmann::json::parse(resp->body()).template get<OpenAIResponse>();
     if(response.choices.size() == 0)
         throw std::runtime_error("Server response does not contain any choices");
     auto r = response.choices[0].message.content;
@@ -401,22 +326,6 @@ struct VertexImagePart
 {
     std::vector<char> data;
     std::string mime;
-
-    void deserialize(const std::string& str) {throw std::runtime_error("Not implemented");}
-    glz::json_t serialize() const
-    {
-        glz::json_t res;
-        res["mime_type"] = mime;
-        res["data"] = drogon::utils::base64Encode(std::string_view(data.data(), data.size()));
-        return res;
-    }
-};
-
-template<>
-struct glz::meta<VertexImagePart>
-{
-    using T = VertexImagePart;
-    static constexpr auto value = object("inline_data", custom<&T::deserialize, &T::serialize>);
 };
 
 struct VertexContent
@@ -429,7 +338,7 @@ struct VertexDataBody
 {
     std::vector<VertexContent> contents;
     std::vector<std::map<std::string, std::string>> safety_settings;
-    std::map<std::string, double> generationConfig; // HACK: Workaround Glaze bug. This should be a struct.
+    std::map<std::string, double> generationConfig;
 };
 
 struct VertexResponse
@@ -449,6 +358,148 @@ struct VertexError
     };
     Error error;
 };
+
+void to_json(nlohmann::json& j, const VertexError::Error& d)
+{
+    j["message"] = d.message;
+}
+
+void from_json(const nlohmann::json& j, VertexError::Error& d)
+{
+    j.at("message").get_to(d.message);
+}
+
+void to_json(nlohmann::json& j, const VertexError& d)
+{
+    j["error"] = d.error;
+}
+
+void from_json(const nlohmann::json& j, VertexError& d)
+{
+    j.at("error").get_to(d.error);
+}
+
+void to_json(nlohmann::json& j, const VertexTextPart& d)
+{
+    j["text"] = d.text;
+}
+
+void from_json(const nlohmann::json& j, VertexTextPart& d)
+{
+    j.at("text").get_to(d.text);
+}
+
+void to_json(nlohmann::json& j, const VertexImagePart& d)
+{
+    j["data"] = drogon::utils::base64Encode(std::string_view(d.data.data(), d.data.size()));
+    j["mime"] = d.mime;
+}
+
+void from_json(const nlohmann::json& j, VertexImagePart& d)
+{
+    std::string data;
+    j.at("data").get_to(data);
+    d.data = drogon::utils::base64DecodeToVector(data);
+    j.at("mime").get_to(d.mime);
+}
+
+void to_json(nlohmann::json& j, const std::vector<std::variant<VertexTextPart, VertexImagePart>>& d)
+{
+    j = nlohmann::json::array();
+    for(auto& entry : d) {
+        if(std::holds_alternative<VertexTextPart>(entry)) {
+            nlohmann::json e;
+            to_json(e, std::get<VertexTextPart>(entry));
+            j.push_back(e);
+        }
+        else {
+            nlohmann::json e;
+            to_json(e, std::get<VertexImagePart>(entry));
+            j.push_back(e);
+        }
+    }
+}
+
+void from_json(const nlohmann::json& j, std::vector<std::variant<VertexTextPart, VertexImagePart>>& d)
+{
+    for(auto& entry : j) {
+        if(entry.contains("text")) {
+            VertexTextPart e;
+            e = entry;
+            d.push_back(e);
+        }
+        else {
+            VertexImagePart e;
+            e = entry;
+            d.push_back(e);
+        }
+    }
+}
+
+void to_json(nlohmann::json& j, const VertexContent& d)
+{
+    j["role"] = d.role;
+    j["parts"] = d.parts;
+}
+
+void from_json(const nlohmann::json& j, VertexContent& d)
+{
+    j.at("role").get_to(d.role);
+    j.at("parts").get_to(d.parts);
+}
+
+void to_json(nlohmann::json& j, const std::vector<VertexContent>& d)
+{
+    j = nlohmann::json::array();
+    for(auto& entry : d) {
+        nlohmann::json e;
+        to_json(e, entry);
+        j.push_back(e);
+    }
+}
+
+void from_json(const nlohmann::json& j, std::vector<VertexContent>& d)
+{
+    for(auto& entry : j) {
+        VertexContent e;
+        e = entry;
+        d.push_back(e);
+    }
+}
+
+void to_json(nlohmann::json& j, const VertexDataBody& d)
+{
+    j["contents"] = d.contents;
+    j["safety_settings"] = d.safety_settings;
+    j["generationConfig"] = d.generationConfig;
+}
+
+void from_json(const nlohmann::json& j, VertexDataBody& d)
+{
+    j.at("contents").get_to(d.contents);
+    j.at("safety_settings").get_to(d.safety_settings);
+    j.at("generationConfig").get_to(d.generationConfig);
+}
+
+void to_json(nlohmann::json& j, const VertexResponse::Candidate& d)
+{
+    j["content"] = d.content;
+}
+
+void from_json(const nlohmann::json& j, VertexResponse::Candidate& d)
+{
+    j.at("content").get_to(d.content);
+}
+
+void to_json(nlohmann::json& j, const VertexResponse& d)
+{
+    j["candidates"] = d.candidates;
+}
+
+void from_json(const nlohmann::json& j, VertexResponse& d)
+{
+    j.at("candidates").get_to(d.candidates);
+}
 
 void oai2vertexContent(VertexContent& v, const ChatEntry& oai)
 {
@@ -524,24 +575,18 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
         {{"category", "HARM_CATEGORY_HATE_SPEECH"}, {"threshold", "BLOCK_NONE"}}
     };
 
-    std::string body_str = glz::write_json(body).value();
+    std::string body_str = nlohmann::json(body).dump();
     LOG_DEBUG << "Request: " << body_str;
     req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
     LOG_DEBUG << "Response: " << resp->body();
     if(resp->statusCode() != k200OK) {
-        VertexError error;
-        auto err = glz::read<laxed_opt>(error, resp->body());
-        if(err)
-            throw std::runtime_error("Request failed. status code: " + std::to_string(resp->statusCode()));
+        VertexError error = nlohmann::json::parse(resp->body()).get<VertexError>();
         throw std::runtime_error(error.error.message);
     }
 
-    VertexResponse response;
-    auto error = glz::read<laxed_opt>(response, resp->body());
-    if(error)
-        throw std::runtime_error("Error parsing response: " + std::string(error.includer_error));
+    VertexResponse response = nlohmann::json::parse(resp->body()).get<VertexResponse>();
     if(response.candidates.size() == 0)
         throw std::runtime_error("Server response does not contain any candidates");
     if(response.candidates[0].content.parts.size() == 0)
@@ -632,6 +677,36 @@ struct DeepinfraEmbedError
     std::string error;
 };
 
+void to_json(nlohmann::json& j, const DeepinfraEmbedDataBody& d)
+{
+    j["inputs"] = d.inputs;
+}
+
+void from_json(const nlohmann::json& j, DeepinfraEmbedDataBody& d)
+{
+    j.at("inputs").get_to(d.inputs);
+}
+
+void to_json(nlohmann::json& j, const DeepinfraEmbedResponse& d)
+{
+    j["embeddings"] = d.embeddings;
+}
+
+void from_json(const nlohmann::json& j, DeepinfraEmbedResponse& d)
+{
+    j.at("embeddings").get_to(d.embeddings);
+}
+
+void to_json(nlohmann::json& j, const DeepinfraEmbedError& d)
+{
+    j["error"] = d.error;
+}
+
+void from_json(const nlohmann::json& j, DeepinfraEmbedError& d)
+{
+    j.at("error").get_to(d.error);
+}
+
 Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<std::string> texts)
 {
     HttpRequestPtr req = HttpRequest::newHttpRequest();
@@ -640,22 +715,16 @@ Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<s
     req->setMethod(HttpMethod::Post);
     DeepinfraEmbedDataBody body;
     body.inputs = std::move(texts);
-    auto body_str = glz::write_json(body).value();
+    auto body_str = nlohmann::json(body).dump();
     req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
     if(resp->statusCode() != k200OK) {
-        DeepinfraEmbedError error;
-        auto err = glz::read_json(error, resp->body());
-        if(err)
-            throw std::runtime_error("Error parsing response");
+        DeepinfraEmbedError error = nlohmann::json::parse(resp->body()).get<DeepinfraEmbedError>();
         throw std::runtime_error(error.error);
     }
 
-    DeepinfraEmbedResponse response;
-    auto error = glz::read<laxed_opt>(response, resp->body());
-    if(error)
-        throw std::runtime_error("Error parsing response");
+    DeepinfraEmbedResponse response = nlohmann::json::parse(resp->body()).get<DeepinfraEmbedResponse>();
     co_return response.embeddings;
 }
 

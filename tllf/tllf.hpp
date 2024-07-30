@@ -7,14 +7,12 @@
 #include <drogon/HttpClient.h>
 #include <drogon/HttpTypes.h>
 #include <exception>
-#include <glaze/json/json_t.hpp>
 #include <initializer_list>
 #include <optional>
 #include <string>
 #include <sys/types.h>
 #include <trantor/net/EventLoop.h>
 #include <unordered_map>
-#include <glaze/glaze.hpp>
 #include <variant>
 #include <vector>
 #include <unordered_set>
@@ -50,11 +48,6 @@ struct ImageBlob
     std::string mime;
 
     static ImageBlob fromFile(const std::string& path, std::string mime = "");
-
-    // Functions for Glaze to serialize the data structure
-    // into formats accepts by OpenAI
-    std::string write_data() const;
-    void read_data(const std::string& data);
 };
 
 struct Text
@@ -69,15 +62,9 @@ struct ChatEntry
     struct Content : public std::variant<std::string, ListOfParts>
     {
         using std::variant<std::string, ListOfParts>::variant;
-
-        glz::json_t write_data() const;
-        void read_data(const std::string& data);
     };
     Content content;
     std::string role;
-
-    glz::json_t write_content() const;
-    void read_data(const std::string& data);
 };
 
 struct Chatlog : public std::vector<ChatEntry>
@@ -111,10 +98,6 @@ struct Chatlog : public std::vector<ChatEntry>
         push_back(ChatEntry{.content = parts, .role = role});
     }
 
-    std::string to_json_string() const;
-    glz::json_t to_json() const;
-
-    static Chatlog from_json_string(const std::string& str);
 };
 
 std::string to_string(const Chatlog& chatlog);

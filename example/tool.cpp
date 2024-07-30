@@ -2,7 +2,8 @@
 #include "tllf/tllf.hpp"
 #include <drogon/utils/coroutine.h>
 #include <drogon/drogon.h>
-#include <glaze/json/json_t.hpp>
+#include <iostream>
+#include <nlohmann/json.hpp>
 
 using namespace tllf;
 using namespace drogon;
@@ -29,9 +30,10 @@ Task<> func()
 {
     auto tool = co_await toolize(foo);
     auto tool2 = co_await toolize(bar);
-    glz::json_t json;
-    json["str"] = "Hello";
-    json["num"] = 42;
+    nlohmann::json json = {
+        {"str", "Hello"},
+        {"num", 42}
+    };
     auto result = co_await tool(json);
     std::cout << result << std::endl;
 
@@ -51,6 +53,7 @@ Example
 {tool_example}
 ======
 )");
+
     prompt.setVariable("tools_list", tools.generateToolList());
     prompt.setVariable("tools_description", tools.generateToolDescription());
     prompt.setVariable("tool_example", tool.generateInvokeExample("Hello", 42));

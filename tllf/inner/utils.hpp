@@ -1,36 +1,45 @@
-#include <glaze/json.hpp>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <yaml-cpp/yaml.h>
 
 namespace tllf::internal
 {
-inline void json2yaml_internal(YAML::Node& node, const glz::json_t& json)
+inline void json2yaml_internal(YAML::Node& node, const nlohmann::json& json)
 {
-    if(json.holds<glz::json_t::object_t>()) {
-        for(auto& [key, val] : json.get<glz::json_t::object_t>()) {
-            YAML::Node child;
-            json2yaml_internal(child, val);
-            node[key] = child;
-        }
-    }
-    else if(json.holds<glz::json_t::array_t>()) {
-        for(auto& val : json.get<glz::json_t::array_t>()) {
-            YAML::Node child;
-            json2yaml_internal(child, val);
-            node.push_back(child);
-        }
-    }
-    else if(json.holds<std::string>())
-        node = json.get<std::string>();
-    else if(json.holds<double>())
-        node = json.get<double>();
-    else if(json.holds<bool>())
+    if(json.is_null())
+        node = YAML::Node();
+    else if(json.is_boolean())
         node = json.get<bool>();
-    else
+    else if(json.is_number_integer())
+        node = json.get<int>();
+    else if(json.is_number_float())
+        node = json.get<double>();
+    else if(json.is_string())
+        node = json.get<std::string>();
+    else if(json.is_array()) {
+        node = YAML::Node(YAML::NodeType::Sequence);
+        for(auto& child : json)
+        {
+            YAML::Node child_node;
+            json2yaml_internal(child_node, child);
+            node.push_back(child_node);
+        }
+    }
+    else if(json.is_object()) {
+        node = YAML::Node(YAML::NodeType::Map);
+        for(auto& [key, val] : json.items())
+        {
+            YAML::Node child_node;
+            json2yaml_internal(child_node, val);
+            node[key] = child_node;
+        }
+    }
+    else {
         throw std::runtime_error("Unknown json type");
+    }
 }
 
-inline YAML::Node json2yaml(const glz::json_t& json)
+inline YAML::Node json2yaml(const nlohmann::json& json)
 {
     YAML::Node node;
     json2yaml_internal(node, json);
@@ -49,46 +58,66 @@ static std::optional<double> try_stod(const std::string& str)
     return std::nullopt;
 }
 
-inline void yaml2json_internal(glz::json_t& json, const YAML::Node& node)
+static std::optional<int> try_stoi(const std::string& str)
 {
-    if(node.IsNull())
-        json.data = glz::json_t::null_t{};
-    else if(node.IsScalar()) {
-        if(auto val = node.as<std::string>(); val == "true" || val == "false")
-            json.data = (val == "true");
+    try {
+        size_t pos;
+        int val = std::stoi(str, &pos);
+        if(pos == str.size())
+            return val;
+    }
+    catch(...) {}
+    return std::nullopt;
+}
+
+static std::optional<bool> try_stob(const std::string& str)
+{
+    if(str == "true")
+        return true;
+    if(str == "false")
+        return false;
+    return std::nullopt;
+}
+
+inline void yaml2json_internal(nlohmann::json& json, const YAML::Node& node)
+{
+    if(node.IsScalar()) {
+        if(auto val = try_stob(node.as<std::string>()))
+            json = *val;
         else if(auto val = try_stod(node.as<std::string>()))
-            json.data = *val;
+            json = *val;
+        else if(auto val = try_stoi(node.as<std::string>()))
+            json = *val;
         else
-            json.data = node.as<std::string>();
+            json = node.as<std::string>();
     }
     else if(node.IsSequence()) {
-        json.data = glz::json_t::array_t{};
+        json = nlohmann::json::array();
         for(auto& child : node)
         {
-            glz::json_t child_json;
+            nlohmann::json child_json;
             yaml2json_internal(child_json, child);
-            json.get<glz::json_t::array_t>().push_back(child_json);
+            json.push_back(child_json);
         }
     }
     else if(node.IsMap()) {
-        json.data = glz::json_t::object_t{};
+        json = nlohmann::json::object();
         for(auto& n : node)
         {
             std::string key = n.first.as<std::string>();
-            glz::json_t child_json;
+            nlohmann::json child_json;
             yaml2json_internal(child_json, n.second);
-            json.get<glz::json_t::object_t>()[key] = child_json;
+            json[key] = child_json;
         }
     }
     else {
         throw std::runtime_error("Unknown yaml type");
     }
-
 }
 
-inline glz::json_t yaml2json(const YAML::Node& node)
+inline nlohmann::json yaml2json(const YAML::Node& node)
 {
-    glz::json_t json;
+    nlohmann::json json;
     yaml2json_internal(json, node);
     return json;
 }
