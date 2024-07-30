@@ -155,7 +155,7 @@ struct glz::meta<ChatEntry>
 
 std::string Chatlog::to_json_string() const
 {
-    return glz::write_json(*this);
+    return glz::write_json(*this).value();
 }
 
 glz::json_t Chatlog::to_json() const
@@ -357,7 +357,7 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
         .stop_sequence = config.stop_sequence
     };
 
-    std::string body_str = glz::write_json(body);
+    std::string body_str = glz::write_json(body).value();
     LOG_DEBUG << "Request: " << body_str;
     req->setBody(body_str);
     req->setContentTypeCode(drogon::CT_APPLICATION_JSON); 
@@ -524,7 +524,7 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
         {{"category", "HARM_CATEGORY_HATE_SPEECH"}, {"threshold", "BLOCK_NONE"}}
     };
 
-    std::string body_str = glz::write_json(body);
+    std::string body_str = glz::write_json(body).value();
     LOG_DEBUG << "Request: " << body_str;
     req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
@@ -640,7 +640,7 @@ Task<std::vector<std::vector<float>>> DeepinfraTextEmbedder::embed(std::vector<s
     req->setMethod(HttpMethod::Post);
     DeepinfraEmbedDataBody body;
     body.inputs = std::move(texts);
-    auto body_str = glz::write_json(body);
+    auto body_str = glz::write_json(body).value();
     req->setBody(body_str);
     req->setContentTypeCode(CT_APPLICATION_JSON);
     auto resp = co_await client->sendRequestCoro(req);
