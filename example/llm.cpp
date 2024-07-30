@@ -27,7 +27,7 @@ Task<> func()
 
     tllf::PlaintextParser parser;
     auto parsed = parser.parseReply(result);
-    std::cout << "Parsed:\n=====\n" << glz::write<glz::opts{.indentation_width=4}>(parsed) << "\n=====\n";
+    std::cout << "Parsed:\n=====\n" << glz::write<glz::opts{.indentation_width=4}>(parsed).value() << "\n=====\n";
 
     co_return;
 }

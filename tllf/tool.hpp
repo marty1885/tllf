@@ -89,7 +89,7 @@ void extract_from_json(T& val, const std::vector<std::string> names, const glz::
         val = json[names[idx]];
     else {
         // Yeah.. not the brightest idea to use glz::write_json and glz::read_json
-        std::string str = glz::write_json(json[names[idx]]);
+        std::string str = glz::write_json(json[names[idx]]).value();
         auto err = glz::read_json(val, str);
         if(err)
             throw std::runtime_error("Failed to read json. ec: " + std::to_string(static_cast<int>(err)));
@@ -169,7 +169,7 @@ struct Tool
         size_t idx = 0;
 
         auto apply_func = [&](auto& val) {
-            std::string str = glz::write_json(val);
+            std::string str = glz::write_json(val).value();
             if(!doc.params[idx].second.validator(str))
                 // TODO: This error message is confusing. We should provide a better error message
                 throw std::runtime_error("Parameter " + doc.params[idx].first + " does not seem to be serializable from example");
