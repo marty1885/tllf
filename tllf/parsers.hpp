@@ -68,6 +68,9 @@ struct MarkdownLikeParser
 };
 using MarkDownListNodes = std::vector<MarkdownLikeParser::ListNode>;
 
+void to_json(nlohmann::json& json, const MarkdownLikeParser::MarkdownLikeData& data);
+void to_json(nlohmann::json& json, const MarkdownLikeParser::MarkdownLikeData& data);
+
 void to_json(nlohmann::json& json, const MarkdownLikeParser::ListNode& node);
 inline nlohmann::json to_json(const MarkdownLikeParser::ListNode& node)
 {

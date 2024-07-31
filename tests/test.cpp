@@ -92,6 +92,16 @@ steps:
     REQUIRE(node[0].children[0].value == "be careful");
     REQUIRE(node[0].children[1].value == "be patient");
     REQUIRE(node[1].children[0].value == "Profit");
+
+    parsed = parser.parseReply(R"(
+params:
+  - query: "How to wire up a solar power generation system")");
+    REQUIRE(parsed.contains("params"));
+    node = std::get<MarkDownListNodes>(parsed["params"]);
+    REQUIRE(node.size() == 1);
+    REQUIRE(node[0].value == "query: \"How to wire up a solar power generation system\"");
+    REQUIRE(node[0].children.empty());
+
 }
 
 DROGON_TEST(JsonParser)

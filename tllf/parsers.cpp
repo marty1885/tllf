@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <nlohmann/json_fwd.hpp>
 #include <string>
+#include <variant>
 
 using namespace tllf;
 
@@ -164,6 +165,23 @@ void tllf::to_json(nlohmann::json& json, const MarkdownLikeParser::ListNode& nod
 {
     to_json_internal(node, json);
 }
+
+void tllf::to_json(nlohmann::json& json, const MarkdownLikeParser::MarkdownLikeData& data)
+{
+    if(std::holds_alternative<std::string>(data)) {
+        json = std::get<std::string>(data);
+    }
+    else {
+        auto& nodes = std::get<std::vector<MarkdownLikeParser::ListNode>>(data);
+        json = nlohmann::json::array();
+        for(auto& node : nodes) {
+            nlohmann::json child_json;
+            to_json(child_json, node);
+            json.push_back(child_json);
+        }
+    }
+}
+
 
 std::vector<std::string> MarkdownListParser::parseReply(const std::string& reply)
 {
