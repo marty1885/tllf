@@ -18,6 +18,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <tllf/tllf.hpp>
+
 #define TLLF_DOC(name) if(::tllf::g_local_return_doc) co_return ::tllf::ToolDoc::make(name)
 #define BRIEF(x) brief(x)
 #define PARAM(x, desc) param(#x, &x, desc)
@@ -45,7 +47,7 @@ struct FunctionTrait<R(Args...)>
     constexpr static size_t ArgCount = sizeof...(Args);
     template <size_t N>
     using ArgType = typename ExtractPack<Args...>::template Type<N>;
-    using ArgTuple = std::tuple<Args...>;
+    using ArgTuple = std::tuple<std::remove_cvref_t<Args>...>; // TODOL: Remove cvref so large objects are not copied
     using Signature = R(Args...);
 };
 
@@ -76,21 +78,28 @@ struct ParamInfo
 };
 
 template <typename T>
-void extract_from_json(T& val, const std::vector<std::string> names, const nlohmann::json& json, size_t& idx)
+void extract_from_json(T& val, const std::vector<std::string> names, const nlohmann::json& json, size_t idx)
 {
     using Type = std::remove_cvref_t<T>;
     if constexpr(std::is_integral_v<T> || std::is_floating_point_v<T>)
         val = json[names[idx]].template get<double>();
+    else if constexpr(std::is_same_v<Type, float>)
+        val = json[names[idx]].template get<float>();
     else if constexpr(std::is_same_v<Type, std::string>)
         val = json[names[idx]].template get<std::string>();
     else if constexpr(std::is_same_v<Type, bool>)
         val = json[names[idx]].template get<bool>();
+    else if constexpr(std::is_same_v<Type, int>)
+        val = json[names[idx]].template get<int>();
+    else if constexpr(std::is_same_v<Type, size_t>)
+        val = json[names[idx]].template get<size_t>();
+    else if constexpr(std::is_same_v<Type, nlohmann::json>)
+        val = json[names[idx]];
     else if constexpr(std::is_same_v<Type, nlohmann::json>)
         val = json[names[idx]];
     else {
         // TODO: Handle this
     }
-    idx++;
 }
 
 } // namespace internal
@@ -117,7 +126,9 @@ struct ToolDoc
             try {
                 if constexpr(is_specialization_of<std::optional, Type>::value) {
                     using InnerType = std::remove_cvref_t<typename Type::value_type>;
-                    if(str == "null" || str == "NULL" || str == "")
+                    std::string lower = str;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    if(lower == "null" || lower == "nil" || lower == "none" || lower == "" || lower == "n/a")
                         return true;
                     nlohmann::json json = nlohmann::json::parse(str);
                     json.get<InnerType>();
@@ -171,7 +182,7 @@ drogon::Task<ToolDoc> getToolDoc(Func&& func)
 struct Tool
 {
     std::string name;
-    std::function<drogon::Task<std::string>(nlohmann::json)> func;
+    std::function<drogon::Task<std::string>(const tllf::Chatlog&, nlohmann::json)> func;
     ToolDoc doc;
 
     template <typename ... Args>
@@ -198,13 +209,13 @@ struct Tool
     }
 
     template <typename ... Args>
-    drogon::Task<std::string> operator()(Args&&... args)
+    drogon::Task<std::string> operator()(const tllf::Chatlog& log, Args&&... args)
     {
         constexpr size_t num_args = sizeof...(Args);
         if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, nlohmann::json>)
-            return func(std::forward<nlohmann::json>(args)...);
+            return func(log, std::forward<nlohmann::json>(args)...);
         else
-            return func(make_json(std::forward<Args>(args)...));
+            return func(log, make_json(std::forward<Args>(args)...));
     }
 
     template <typename ... Args>
@@ -318,7 +329,7 @@ drogon::Task<Tool> toolize(Func&& func)
         param_names[i] = doc.params[i].first;
     }
 
-    auto functor = [func = std::move(func), param_names = std::move(param_names)](nlohmann::json invoke_data) -> drogon::Task<std::string> {
+    auto functor = [func = std::move(func), param_names = std::move(param_names)](const tllf::Chatlog& log, nlohmann::json invoke_data) -> drogon::Task<std::string> {
         using FuncType = std::remove_cvref_t<Func>;
         using Traits = tllf::internal::FunctionTrait<FuncType>;
         using InvokeTuple = Traits::ArgTuple;
@@ -327,7 +338,13 @@ drogon::Task<Tool> toolize(Func&& func)
 
         size_t idx = 0;
         auto apply_func = [&](auto& val) {
-            internal::extract_from_json(val, param_names, invoke_data, idx);
+            // HACK: 1st argument is log
+            if(idx == 0)
+                std::get<0>(tup) = log;
+            else
+                internal::extract_from_json(val, param_names, invoke_data, idx-1);
+            idx++;
+            
         };
         std::apply([&](auto&... args) { (apply_func(args), ...); }, tup);
         auto res = co_await std::apply(func, tup);

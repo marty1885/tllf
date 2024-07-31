@@ -190,7 +190,7 @@ steps:
 //     REQUIRE(deserialized.size() == 4);
 // }
 
-tllf::ToolResult noop_tool(std::string s)
+tllf::ToolResult noop_tool(const tllf::Chatlog& log, std::string s)
 {
     TLLF_DOC("noop")
         .BRIEF("Returns the same thing in it is given.")
@@ -199,7 +199,7 @@ tllf::ToolResult noop_tool(std::string s)
 }
 
 
-tllf::ToolResult optional_tool(std::optional<std::string> s)
+tllf::ToolResult optional_tool(const tllf::Chatlog& log, std::optional<std::string> s)
 {
     TLLF_DOC("noop")
         .BRIEF("Returns the same thing in it is given.")
@@ -220,14 +220,14 @@ DROGON_TEST(tool)
 
         nlohmann::json invoke_data;
         invoke_data["s"] = "Hello!";
-        auto res = co_await f(invoke_data);
+        auto res = co_await f(tllf::Chatlog{}, invoke_data);
         CO_REQUIRE(res == "Hello!");
 
         // Make sure these also compiles
         // std::function
         co_await toolize(std::function(noop_tool));
         // lambda
-        co_await toolize([](std::string s) { return noop_tool(s); });
+        co_await toolize([](const tllf::Chatlog& log, std::string s) { return noop_tool(log, s); });
         // function pointer
         co_await toolize(&noop_tool);
     };
@@ -236,11 +236,11 @@ DROGON_TEST(tool)
         auto f = co_await toolize(optional_tool);
         auto doc = co_await getToolDoc(optional_tool);
 
-        auto res = co_await f(nlohmann::json());
+        auto res = co_await f(tllf::Chatlog{}, nlohmann::json());
         CO_REQUIRE(res == "The string is not given");
-        res = co_await f("Hello");
+        res = co_await f(tllf::Chatlog{}, "Hello");
         CO_REQUIRE(res == "Hello");
-        res = co_await f(nlohmann::json({{"s", "Hello"}}));
+        res = co_await f(tllf::Chatlog{}, nlohmann::json({{"s", "Hello"}}));
         CO_REQUIRE(res == "Hello");
     };
 }

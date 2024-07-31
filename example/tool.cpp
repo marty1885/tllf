@@ -9,7 +9,7 @@ using namespace tllf;
 using namespace drogon;
 
 
-tllf::ToolResult foo(std::string str, int num)
+tllf::ToolResult foo(const tllf::Chatlog& log, std::string str, int num)
 {
     TLLF_DOC("foo")
         .BRIEF("An example tool.")
@@ -18,7 +18,7 @@ tllf::ToolResult foo(std::string str, int num)
     co_return str + std::to_string(num);
 }
 
-tllf::ToolResult bar(double n)
+tllf::ToolResult bar(const tllf::Chatlog& log, double n)
 {
     TLLF_DOC("bar")
         .BRIEF("Another example tool.")
@@ -34,7 +34,7 @@ Task<> func()
         {"str", "Hello"},
         {"num", 42}
     };
-    auto result = co_await tool(json);
+    auto result = co_await tool(tllf::Chatlog{}, json);
     std::cout << result << std::endl;
 
     Toolset tools;
