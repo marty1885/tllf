@@ -212,8 +212,10 @@ struct Tool
     drogon::Task<std::string> operator()(const tllf::Chatlog& log, Args&&... args)
     {
         constexpr size_t num_args = sizeof...(Args);
-        if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, nlohmann::json>)
+        if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, nlohmann::json>) {
+            static_assert(num_args == 1, "Only one argument is allowed when passing a JSON object");
             return func(log, std::forward<nlohmann::json>(args)...);
+        }
         else
             return func(log, make_json(std::forward<Args>(args)...));
     }
@@ -334,8 +336,10 @@ drogon::Task<Tool> toolize(Func&& func)
         using Traits = tllf::internal::FunctionTrait<FuncType>;
         using InvokeTuple = Traits::ArgTuple;
         constexpr size_t num_args = Traits::ArgCount;
-        InvokeTuple tup;
+        if(invoke_data.is_object() == false)
+            throw std::runtime_error("Invoke data must be an ordered, JSON object of the parameters");
 
+        InvokeTuple tup;
         size_t idx = 0;
         auto apply_func = [&](auto& val) {
             // HACK: 1st argument is log
