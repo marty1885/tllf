@@ -132,12 +132,12 @@ struct OpenAIError
 
 void to_json(nlohmann::json& j, const OpenAIError& d)
 {
-    j["error"] = d.error;
+    j["detail"] = d.error;
 }
 
 void from_json(const nlohmann::json& j, OpenAIError& d)
 {
-    j.at("error").get_to(d.error);
+    j.at("detail").get_to(d.error);
 }
 
 void to_json(nlohmann::json& j, const OpenAIResponse::Choice::Message& d)
@@ -245,7 +245,7 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
         // By defaul retry after 500ms
         double retry_delay = 0.5;
         try {
-            co_return co_await generateImpl(std::move(history), std::move(config));
+            co_return co_await generateImpl(history, std::move(config));
         }
         catch(const RateLimitError& e) {
             if(e.until_reset_ms.has_value())
@@ -539,28 +539,42 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
     std::vector<VertexContent> log;
 
     // Gemini does not have a "system" role. So we need to merge the system messages into the user messages.
-    std::string buffered_sys_message;
+    // Also Gemini MUST have alternating user and model messages. Else the API breaks
+    VertexContent buffered;
+    std::string last_role;
+    bool first = true;
 
     for(auto& entry : history) {
         if(entry.role == "system") {
+            if(!first)
+                throw std::runtime_error("System message must be the first message in the chatlog");
             if(!std::holds_alternative<std::string>(entry.content))
                 throw std::runtime_error("System message MUST be a string");
-            buffered_sys_message += std::get<std::string>(entry.content) + "\n";
+
+            buffered.parts.push_back(VertexTextPart{std::get<std::string>(entry.content)});
+            buffered.role = "user";
+            last_role = "user";
         }
-        else {
-            VertexContent content;
-            // Vertex AI has different name vs OpenAI
-            content.role = entry.role == "user" ? "user" : "model";
-            if(!buffered_sys_message.empty()) {
-                content.parts.push_back(VertexTextPart{buffered_sys_message});
-                buffered_sys_message.clear();
-            }
-            
-            oai2vertexContent(content, entry);
-            log.push_back(content);
+        first = false;
+
+        std::string role = (entry.role == "user" ? "user" : "model");
+
+        if(last_role != entry.role) {
+            log.push_back(buffered);
+            buffered = VertexContent{.role = role};
         }
+
+        VertexContent v;
+        oai2vertexContent(v, entry);
+        for(auto& part : v.parts) {
+            buffered.parts.push_back(part);
+        }
+        last_role = role;
     }
     body.contents = std::move(log);
+
+    if(buffered.parts.size() > 0)
+        body.contents.push_back(buffered);
 
     // TOOD: Add more config options
     if(config.max_tokens.has_value()) body.generationConfig["maxOutputTokens"] = config.max_tokens.value();

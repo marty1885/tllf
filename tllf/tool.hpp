@@ -1,6 +1,4 @@
 #pragma once
-
-#include <concepts>
 #include <cstddef>
 #include <drogon/utils/coroutine.h>
 #include <sstream>
@@ -80,6 +78,8 @@ struct ParamInfo
 template <typename T>
 void extract_from_json(T& val, const std::vector<std::string> names, const nlohmann::json& json, size_t idx)
 {
+    if(!json.contains(names[idx]))
+        throw std::runtime_error("Missing parameter " + names[idx] + " in JSON object");
     using Type = std::remove_cvref_t<T>;
     if constexpr(std::is_integral_v<T> || std::is_floating_point_v<T>)
         val = json[names[idx]].template get<double>();
@@ -189,7 +189,7 @@ struct Tool
     nlohmann::json make_json(Args&&... args)
     {
         constexpr size_t num_args = sizeof...(Args);
-        if(num_args != doc.params.size())
+        if(num_args != doc.params.size() + 1)
             throw std::runtime_error("Argument size does not match tool params");
 
         nlohmann::json json;
@@ -294,7 +294,7 @@ struct Toolset : public std::vector<Tool>
         return str;
     }
 
-    bool contains(const std::string& name)
+    bool contains(const std::string& name) const
     {
         return std::any_of(begin(), end(), [&](const Tool& tool) { return tool.name == name; });
     }
@@ -322,12 +322,12 @@ drogon::Task<Tool> toolize(Func&& func)
     using Traits = tllf::internal::FunctionTrait<FuncType>;
     static_assert(Traits::ok, "Fail to match function to traits");
 
-    if(Traits::ArgCount != doc.params.size())
+    if(Traits::ArgCount != doc.params.size() + 1)
         throw std::runtime_error("Argument size does not match");
 
     std::vector<std::string> param_names;
-    param_names.resize(Traits::ArgCount);
-    for(size_t i=0;i<Traits::ArgCount;i++) {
+    param_names.resize(doc.params.size());
+    for(size_t i=0;i<doc.params.size();i++) {
         param_names[i] = doc.params[i].first;
     }
 
@@ -351,6 +351,8 @@ drogon::Task<Tool> toolize(Func&& func)
             
         };
         std::apply([&](auto&... args) { (apply_func(args), ...); }, tup);
+        if(idx != num_args)
+            throw std::runtime_error("Expecting " + std::to_string(num_args) + " arguments, but got " + std::to_string(idx) + ", including the chatlog");
         auto res = co_await std::apply(func, tup);
         if(std::holds_alternative<ToolDoc>(res))
             throw std::runtime_error("Function returned a ToolDoc. WTF?");
