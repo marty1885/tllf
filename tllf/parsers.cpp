@@ -129,18 +129,15 @@ std::map<std::string, MarkdownLikeParser::MarkdownLikeData> MarkdownLikeParser::
 static void to_json_internal(const MarkdownLikeParser::ListNode& node, nlohmann::json& json)
 {
     auto& value = node.value;
-    if(value.ends_with(":") || value.find_last_of(":") == value.size() - 1) {
-        if(node.children.empty()) {
-            throw std::runtime_error("Invalid node. Has no value and no children");
+    if(node.children.size() != 0) {
+        nlohmann::json child_json;
+        for(auto& child : node.children) {
+            to_json_internal(child, child_json);
         }
-        else {
-            nlohmann::json child_json;
-            for(auto& child : node.children) {
-                to_json_internal(child, child_json);
-            }
-            std::string key = value.substr(0, value.size() - 1);
-            json[key] = child_json;
-        }
+        std::string key = value;
+        if(key.ends_with(":"))
+            key = key.substr(0, key.size() - 1);
+        json[key] = child_json;
         return;
     }
 

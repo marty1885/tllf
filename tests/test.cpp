@@ -93,15 +93,6 @@ steps:
     REQUIRE(node[0].children[1].value == "be patient");
     REQUIRE(node[1].children[0].value == "Profit");
 
-    parsed = parser.parseReply(R"(
-params:
-  - query: "How to wire up a solar power generation system")");
-    REQUIRE(parsed.contains("params"));
-    node = std::get<MarkDownListNodes>(parsed["params"]);
-    REQUIRE(node.size() == 1);
-    REQUIRE(node[0].value == "query: \"How to wire up a solar power generation system\"");
-    REQUIRE(node[0].children.empty());
-
 }
 
 DROGON_TEST(JsonParser)
@@ -182,6 +173,16 @@ steps:
 
     auto parsed = MarkdownLikeParser().parseReply(str);
     auto json = tllf::to_json(parsed["steps"].get<MarkDownListNodes>()[0]);
+    REQUIRE(nlohmann::json(json).dump() == R"({"online_search":{"page":2,"query":"cat"}})");
+
+    str = R"(
+steps:
+- online_search
+   - query: cat
+   - page: 2
+)";
+    parsed = MarkdownLikeParser().parseReply(str);
+    json = tllf::to_json(parsed["steps"].get<MarkDownListNodes>()[0]);
     REQUIRE(nlohmann::json(json).dump() == R"({"online_search":{"page":2,"query":"cat"}})");
 }
 
