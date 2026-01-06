@@ -1,6 +1,5 @@
 #pragma once
 
-#include "tllf/url_parser.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <drogon/CacheMap.h>
@@ -42,27 +41,21 @@ struct TextGenerationConfig
     std::optional<int> stop_sequence;
 };
 
-struct ImageBlob
+struct ImageUrl
 {
-    std::vector<char> data;
-    std::string mime;
-
-    static ImageBlob fromFile(const std::string& path, std::string mime = "");
+    std::string url;
 };
 
-struct Text
+struct ImageByUrl
 {
-    std::string text;
+    ImageUrl image_url;
 };
 
 struct ChatEntry
 {
-    using Part = std::variant<std::string, Url, ImageBlob>;
-    using ListOfParts = std::vector<Part>;
-    struct Content : public std::variant<std::string, ListOfParts>
-    {
-        using std::variant<std::string, ListOfParts>::variant;
-    };
+    using Part = std::variant<std::string, ImageByUrl>;
+    using Parts = std::vector<Part>;
+    using Content = std::variant<std::string, Parts>;
     Content content;
     std::string role;
 };
@@ -93,7 +86,7 @@ struct Chatlog : public std::vector<ChatEntry>
         push_back(ChatEntry{.content = content, .role = role});
     }
 
-    void push_back(ChatEntry::ListOfParts parts, std::string role)
+    void push_back(ChatEntry::Parts parts, std::string role)
     {
         push_back(ChatEntry{.content = parts, .role = role});
     }
@@ -221,5 +214,7 @@ struct PromptTemplate
 
     static std::unordered_set<std::string> extractVars(const std::string& prompt);
 };
+
+std::string dataUrlfromFile(const std::string& path, std::string mime="");
 
 }

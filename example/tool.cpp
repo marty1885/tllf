@@ -34,30 +34,8 @@ Task<> func()
         {"str", "Hello"},
         {"num", 42}
     };
-    auto result = co_await tool(tllf::Chatlog{}, json);
+    auto result = co_await tool(json.dump());
     std::cout << result << std::endl;
-
-    Toolset tools;
-    tools.push_back(tool);
-    tools.push_back(tool2);
-
-    PromptTemplate prompt(R"(
-======
-Tools
-{tools_list}
-
-Description
-{tools_description}
-
-Example
-{tool_example}
-======
-)");
-
-    prompt.setVariable("tools_list", tools.generateToolList());
-    prompt.setVariable("tools_description", tools.generateToolDescription());
-    prompt.setVariable("tool_example", tool.generateInvokeExample("Hello", 42));
-    std::cout << prompt.render() << std::endl;
 }
 
 int main()

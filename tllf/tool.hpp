@@ -1,7 +1,8 @@
 #pragma once
 #include <cstddef>
 #include <drogon/utils/coroutine.h>
-#include <sstream>
+#include <glaze/json/generic.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -13,8 +14,6 @@
 #include <yaml-cpp/emittermanip.h>
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
-
-#include <nlohmann/json.hpp>
 
 #include <tllf/tllf.hpp>
 
@@ -72,35 +71,8 @@ struct FunctionTrait : public FunctionTrait<decltype(&Function::operator())>
 struct ParamInfo
 {
     std::string desc;
-    std::function<bool(const std::string&)> validator;
+    bool is_mandatory;
 };
-
-template <typename T>
-void extract_from_json(T& val, const std::vector<std::string> names, const nlohmann::json& json, size_t idx)
-{
-    if(!json.contains(names[idx]))
-        throw std::runtime_error("Missing parameter " + names[idx] + " in JSON object");
-    using Type = std::remove_cvref_t<T>;
-    if constexpr(std::is_integral_v<T> || std::is_floating_point_v<T>)
-        val = json[names[idx]].template get<double>();
-    else if constexpr(std::is_same_v<Type, float>)
-        val = json[names[idx]].template get<float>();
-    else if constexpr(std::is_same_v<Type, std::string>)
-        val = json[names[idx]].template get<std::string>();
-    else if constexpr(std::is_same_v<Type, bool>)
-        val = json[names[idx]].template get<bool>();
-    else if constexpr(std::is_same_v<Type, int>)
-        val = json[names[idx]].template get<int>();
-    else if constexpr(std::is_same_v<Type, size_t>)
-        val = json[names[idx]].template get<size_t>();
-    else if constexpr(std::is_same_v<Type, nlohmann::json>)
-        val = json[names[idx]];
-    else if constexpr(std::is_same_v<Type, nlohmann::json>)
-        val = json[names[idx]];
-    else {
-        // TODO: Handle this
-    }
-}
 
 } // namespace internal
 extern thread_local bool g_local_return_doc;
@@ -121,32 +93,10 @@ struct ToolDoc
     template <typename T>
     ToolDoc& param(std::string name, const T* ptr, std::string desc) {
         (void)ptr;
-        using Type = std::remove_cvref_t<T>;
-        auto validator = [](const std::string& str) -> bool {
-            try {
-                if constexpr(is_specialization_of<std::optional, Type>::value) {
-                    using InnerType = std::remove_cvref_t<typename Type::value_type>;
-                    std::string lower = str;
-                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-                    if(lower == "null" || lower == "nil" || lower == "none" || lower == "" || lower == "n/a")
-                        return true;
-                    nlohmann::json json = nlohmann::json::parse(str);
-                    json.get<InnerType>();
-                }
-                else {
-                    nlohmann::json json = nlohmann::json::parse(str);
-                    json.get<Type>();
-                }
-            }
-            catch(...) {
-                return false;
-            }
-            return true;
-        };
-        params.push_back({name, internal::ParamInfo{desc, validator}});
+        params.push_back({name, internal::ParamInfo{desc, is_specialization_of<std::optional, T>::value}});
         return *this;
     }
-    
+
     static ToolDoc make(std::string name) { ToolDoc doc; doc.name = std::move(name); return doc;}
 
 protected:
@@ -182,134 +132,13 @@ drogon::Task<ToolDoc> getToolDoc(Func&& func)
 struct Tool
 {
     std::string name;
-    std::function<drogon::Task<std::string>(const tllf::Chatlog&, nlohmann::json)> func;
+    std::function<drogon::Task<std::string>(const std::string&)> func;
     ToolDoc doc;
 
     template <typename ... Args>
-    nlohmann::json make_json(Args&&... args)
+    drogon::Task<std::string> operator()(Args&&... args)
     {
-        constexpr size_t num_args = sizeof...(Args);
-        if(num_args != doc.params.size() + 1)
-            throw std::runtime_error("Argument size does not match tool params");
-
-        nlohmann::json json;
-        size_t idx = 0;
-
-        auto apply_func = [&](auto& val) {
-            std::string str = nlohmann::json(val).dump();
-            if(!doc.params[idx].second.validator(str))
-                // TODO: This error message is confusing. We should provide a better error message
-                throw std::runtime_error("Parameter " + doc.params[idx].first + " does not seem to be serializable from example");
-            json[doc.params[idx].first] = val;
-            idx++;
-        };
-
-        std::apply([&](auto&... args) { (apply_func(args), ...); }, std::forward_as_tuple(args...));
-        return json;
-    }
-
-    template <typename ... Args>
-    drogon::Task<std::string> operator()(const tllf::Chatlog& log, Args&&... args)
-    {
-        constexpr size_t num_args = sizeof...(Args);
-        if constexpr(num_args == 1 && std::is_same_v<std::remove_cvref_t<std::tuple_element_t<0, std::tuple<Args...>>>, nlohmann::json>) {
-            static_assert(num_args == 1, "Only one argument is allowed when passing a JSON object");
-            return func(log, std::forward<nlohmann::json>(args)...);
-        }
-        else
-            return func(log, make_json(std::forward<Args>(args)...));
-    }
-
-    template <typename ... Args>
-    std::string generateInvokeExample(Args&&... args)
-    {
-        auto json = make_json(std::forward<Args>(args)...);
-        YAML::Node yaml;
-        yaml[name] = internal::json2yaml(json);
-        YAML::Emitter emitter;
-        emitter << yaml;
-
-        std::stringstream ss;
-        // HACK: add a - to the beginning of each line to turn it into a markdown list
-        ss << emitter.c_str();
-        std::string line;
-        std::string result;
-        while(std::getline(ss, line)) {
-            auto pos = line.find_first_not_of(' ');
-            std::string new_line;
-            if(pos != std::string::npos) {
-                for(size_t i=0;i<pos;i++)
-                    new_line += ' ';
-                new_line += "- " + line.substr(pos);
-            }
-            else
-                new_line = "- " + line;
-            result += new_line + "\n";
-        }
-        if(result.size() != 0 && result.back() == '\n')
-            result.pop_back();
-        return result;
-    }
-};
-
-struct Toolset : public std::vector<Tool>
-{
-    Toolset(std::initializer_list<Tool> tools) : std::vector<Tool>(tools) {}
-    Toolset() = default;
-
-    std::string generateToolList() const
-    {
-        std::string str;
-        for(auto& tool : *this) {
-            str += "- " + tool.name + "\n";
-        }
-        if(str.size() != 0 && str.back() == '\n')
-            str.pop_back(); 
-        return str;
-    }
-
-    std::string generateToolListWithBrief() const
-    {
-        std::string str;
-        for(auto& tool : *this) {
-            str += "- " + tool.name + ": " + tool.doc.brief_ + "\n";
-        }
-        if(str.size() != 0 && str.back() == '\n')
-            str.pop_back();
-        return str;
-    }
-
-    std::string generateToolDescription() const
-    {
-        // Can't use YAML here because we want syntax closer to Markdown
-        std::string str;
-        for(auto& tool : *this) {
-            str += "- " + tool.name + ": " + tool.doc.brief_ + "\n";
-            for(auto& param : tool.doc.params) {
-                str += "  - " + param.first + ": <" + param.second.desc + ">\n";
-            }
-        }
-        if(str.size() != 0 && str.back() == '\n')
-            str.pop_back();
-        return str;
-    }
-
-    bool contains(const std::string& name) const
-    {
-        return std::any_of(begin(), end(), [&](const Tool& tool) { return tool.name == name; });
-    }
-
-    Tool& operator[](const std::string& name)
-    {
-        auto it = std::find_if(begin(), end(), [&](const Tool& tool) { return tool.name == name; });
-        if(it == end())
-            throw std::runtime_error("Tool " + name + " not found");
-        return *it;
-    }
-
-    const Tool& operator[](const std::string& name) const
-    {
-        return const_cast<const Tool&>(static_cast<const Toolset&>(*this)[name]);
+        return func(std::forward<Args>(args)...);
     }
 };
 
@@ -331,28 +160,24 @@ drogon::Task<Tool> toolize(Func&& func)
         param_names[i] = doc.params[i].first;
     }
 
-    auto functor = [func = std::move(func), param_names = std::move(param_names)](const tllf::Chatlog& log, nlohmann::json invoke_data) -> drogon::Task<std::string> {
+    auto functor = [func = std::move(func), param_names = std::move(param_names)](const std::string& invoke_data) -> drogon::Task<std::string> {
         using FuncType = std::remove_cvref_t<Func>;
         using Traits = tllf::internal::FunctionTrait<FuncType>;
         using InvokeTuple = Traits::ArgTuple;
         constexpr size_t num_args = Traits::ArgCount;
-        if(invoke_data.is_object() == false)
-            throw std::runtime_error("Invoke data must be an ordered, JSON object of the parameters");
+
+        glz::generic json_data;
+        auto ec = glz::read_json(json_data, invoke_data);
+        if(ec)
+            throw std::runtime_error("Failed to parse JSON during tool invocation");
 
         InvokeTuple tup;
         size_t idx = 0;
         auto apply_func = [&](auto& val) {
-            // HACK: 1st argument is log
-            if(idx == 0)
-                std::get<0>(tup) = log;
-            else
-                internal::extract_from_json(val, param_names, invoke_data, idx-1);
-            idx++;
-            
+            using Type = std::remove_cvref_t<decltype(val)>;
+            val = json_data[param_names[idx++]].as<Type>();
         };
         std::apply([&](auto&... args) { (apply_func(args), ...); }, tup);
-        if(idx != num_args)
-            throw std::runtime_error("Expecting " + std::to_string(num_args) + " arguments, but got " + std::to_string(idx) + ", including the chatlog");
         auto res = co_await std::apply(func, tup);
         if(std::holds_alternative<ToolDoc>(res))
             throw std::runtime_error("Function returned a ToolDoc. WTF?");
