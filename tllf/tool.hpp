@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <drogon/utils/coroutine.h>
 #include <glaze/json/generic.hpp>
+#include <glaze/json/write.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -71,6 +72,7 @@ struct FunctionTrait : public FunctionTrait<decltype(&Function::operator())>
 struct ParamInfo
 {
     std::string desc;
+    std::string type;
     bool is_mandatory;
 };
 
@@ -83,6 +85,19 @@ struct is_specialization_of: std::false_type {};
 template <template <typename...> class T, typename... Us>
 struct is_specialization_of<T, T<Us...>>: std::true_type {};
 
+template<typename T>
+struct remove_optional {
+    using type = T;
+};
+
+template<typename T>
+struct remove_optional<std::optional<T>> {
+    using type = T;
+};
+
+template<typename T>
+using remove_optional_t = typename remove_optional<T>::type;
+
 struct ToolDoc
 {
     std::string brief_;
@@ -93,7 +108,27 @@ struct ToolDoc
     template <typename T>
     ToolDoc& param(std::string name, const T* ptr, std::string desc) {
         (void)ptr;
-        params.push_back({name, internal::ParamInfo{desc, is_specialization_of<std::optional, T>::value}});
+        using Type = remove_optional_t<T>;
+        std::string type;
+        if constexpr(is_specialization_of<std::vector, Type>::value) {
+            type = "array";
+        }
+        else if constexpr(is_specialization_of<std::map, Type>::value) {
+            type = "object";
+        }
+        else if constexpr(std::is_same_v<Type, bool>) {
+            type = "boolean";
+        }
+        else if constexpr(std::is_same_v<Type, std::string>) {
+            type = "string";
+        }
+        else if constexpr(std::is_same_v<Type, double> || std::is_same_v<Type, int> || std::is_same_v<Type, float>) {
+            type = "number";
+        }
+        else {
+            throw std::invalid_argument("Unsupported parameter type");
+        }
+        params.push_back({name, internal::ParamInfo{desc, type, is_specialization_of<std::optional, T>::value}});
         return *this;
     }
 
@@ -140,6 +175,31 @@ struct Tool
     {
         return func(std::forward<Args>(args)...);
     }
+
+    // FIXME: Use static schemas
+    // TODO: Migrate to use of Glaze's JSON scheme generation
+    glz::generic makeOpenAIToolObject() const
+    {
+        glz::generic data;
+        data["name"] = name;
+        data["description"] = doc.brief_;
+        glz::generic parameters;
+        parameters["type"] = "object";
+        parameters["properties"] = glz::generic{};
+        for(const auto& param : doc.params) {
+            glz::generic prop;
+            prop["type"] = param.second.type;
+            parameters["properties"][param.first] = prop;
+        }
+        data["parameters"] = parameters;
+        std::vector<std::string> required;
+        for(const auto& param : doc.params) {
+            if(param.second.is_mandatory)
+                required.push_back(param.first);
+        }
+        data["parameters"]["required"] = required;
+        return data;
+    }
 };
 
 template <typename Func>
@@ -151,7 +211,7 @@ drogon::Task<Tool> toolize(Func&& func)
     using Traits = tllf::internal::FunctionTrait<FuncType>;
     static_assert(Traits::ok, "Fail to match function to traits");
 
-    if(Traits::ArgCount != doc.params.size() + 1)
+    if(Traits::ArgCount != doc.params.size())
         throw std::runtime_error("Argument size does not match");
 
     std::vector<std::string> param_names;
@@ -175,7 +235,19 @@ drogon::Task<Tool> toolize(Func&& func)
         size_t idx = 0;
         auto apply_func = [&](auto& val) {
             using Type = std::remove_cvref_t<decltype(val)>;
-            val = json_data[param_names[idx++]].as<Type>();
+
+            // Not the fastest way
+            const std::string& name = param_names[idx++];
+            if(!json_data.contains(name)) {
+                if(is_specialization_of<std::optional, Type>::value)
+                    return;
+                else
+                    throw std::runtime_error("Missing required parameter for tool: " + name);
+            }
+            auto str = glz::write_json(json_data[name]).value();
+            auto ec = glz::read<glz::opts{.error_on_missing_keys=true}>(val, str);
+            if(ec)
+                throw std::runtime_error("Failed to parse JSON parameters during tool invocation");
         };
         std::apply([&](auto&... args) { (apply_func(args), ...); }, tup);
         auto res = co_await std::apply(func, tup);
