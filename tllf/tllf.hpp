@@ -24,7 +24,6 @@
 namespace tllf
 {
 
-
 namespace internal
 {
 drogon::HttpClientPtr getClient(const std::string& hoststr, trantor::EventLoop* loop = nullptr);

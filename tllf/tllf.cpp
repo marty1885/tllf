@@ -209,12 +209,6 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config, co
             if(e.until_reset_ms.has_value())
                 retry_delay = e.until_reset_ms.value() / 1000;
         }
-        catch(const std::exception& e) {
-            if(retry >= max_retry)
-                throw;
-            errored = true;
-            LOG_WARN << "Request failed. Retrying... " << e.what();
-        }
 
         if(errored) {
             co_await drogon::sleepCoro(trantor::EventLoop::getEventLoopOfCurrentThread(), retry_delay);
@@ -273,7 +267,6 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
                 until_reset = std::stod(resp->getHeader("X-RateLimit-Reset"));
             throw RateLimitError(until_reset * 1000);
         }
-        // 422 if we fucked up
         else if(resp->statusCode() != drogon::k200OK) {
             OpenAIError error;
             auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
@@ -292,6 +285,7 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
 
         auto tool_calls = choice.message.tool_calls;
         std::vector<Task<std::string>> invocations;
+        invocations.reserve(tool_calls.size());
         for(auto& tool_call : tool_calls) {
             auto it = std::find_if(tools.begin(), tools.end(), [&](const auto& tool) {
                 return tool.name == tool_call.function.name;
@@ -303,18 +297,18 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
             if(ec)
                 throw std::runtime_error("Failed to parse arguments: " + glz::format_error(ec, tool_call.function.arguments));
             std::string args;
-            if(json.contains("properties")) {
+            // Sone leaway for dumb llms
+            if(json.contains("properties") && json["properties"].is_object()) {
                 args = glz::write_json(json.at("properties")).value();
             }
+            else if(json.contains("parameters") && json["parameters"].is_object()) {
+                args = glz::write_json(json.at("parameters")).value();
+            }
             else
-                args = glz::write_json(json).value();
+                args = tool_call.function.arguments;
             invocations.push_back(it->func(args));
         }
-
-        LOG_DEBUG << "Invoking " << tool_calls.size() << " tools";
-
         auto res = co_await when_all(std::move(invocations));
-        LOG_DEBUG << "Post-invocation";
         assert(res.size() == tool_calls.size());
         for(size_t i = 0; i < res.size(); ++i) {
             auto& r = res[i];
@@ -420,8 +414,8 @@ Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGeneratio
         if(entry.role == "system") {
             if(!first)
                 throw std::runtime_error("System message must be the first message in the chatlog");
-            // if(!std::holds_alternative<std::string>(entry.content))
-            //     throw std::runtime_error("System message MUST be a string");
+            if(!std::holds_alternative<std::string>(entry.content))
+                throw std::runtime_error("System message MUST be a string");
 
             buffered.parts.push_back(VertexTextPart{std::get<std::string>(entry.content)});
             buffered.role = "user";
