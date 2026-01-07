@@ -29,7 +29,7 @@ using namespace drogon;
 
 struct OpenAIToolDesc
 {
-    std::string type = "function";
+    std::optional<std::string> type = "function";
     glz::generic function;
 };
 
@@ -255,11 +255,11 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
         std::string body_str = glz::write_json(body).value();
         LOG_DEBUG << "Request: " << body_str;
         req->setBody(body_str);
-        req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+        req->setContentTypeCode(CT_APPLICATION_JSON);
         auto resp = co_await client->sendRequestCoro(req);
         LOG_DEBUG << "status = " << static_cast<int>(resp->statusCode());
         LOG_DEBUG << "Response: " << resp->body();
-        if(resp->statusCode() == drogon::k429TooManyRequests) {
+        if(resp->statusCode() == k429TooManyRequests) {
             double until_reset = 2.;
             if(resp->getHeader("Retry-After") != "")
                 until_reset = std::stod(resp->getHeader("Retry-After"));
@@ -267,7 +267,7 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
                 until_reset = std::stod(resp->getHeader("X-RateLimit-Reset"));
             throw RateLimitError(until_reset * 1000);
         }
-        else if(resp->statusCode() != drogon::k200OK) {
+        else if(resp->statusCode() != k200OK) {
             OpenAIError error;
             auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
             if(ec)
@@ -322,164 +322,6 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     }
 
     co_return response.choices[0].message.content.value_or("");
-}
-
-struct VertexTextPart
-{
-    std::string text;
-};
-
-struct VertexImagePart
-{
-    std::string data;
-    std::string mime;
-};
-
-struct VertexContent
-{
-    std::string role;
-    std::vector<std::variant<VertexTextPart, VertexImagePart>> parts;
-};
-
-struct VertexDataBody
-{
-    std::vector<VertexContent> contents;
-    std::vector<std::map<std::string, std::string>> safety_settings;
-    std::map<std::string, double> generationConfig;
-};
-
-struct VertexResponse
-{
-    struct Candidate
-    {
-        VertexContent content;
-    };
-    std::vector<Candidate> candidates;
-};
-
-struct VertexError
-{
-    struct Error
-    {
-        std::string message;
-    };
-    Error error;
-};
-
-void oai2vertexContent(VertexContent& v, const ChatEntry& oai)
-{
-    std::visit([&](auto&& c) {
-        using T = std::decay_t<decltype(c)>;
-        if constexpr(std::is_same_v<T, std::string>)
-            v.parts.push_back(VertexTextPart{c});
-        else {
-            static_assert(std::is_same_v<T, ChatEntry::Parts>);
-            for(auto& p : c) {
-                std::visit([&](auto&& c) {
-                    using T = std::decay_t<decltype(c)>;
-                    if constexpr(std::is_same_v<T, std::string>)
-                        v.parts.push_back(VertexTextPart{c});
-                    else if constexpr(std::is_same_v<T, ImageByUrl>)
-                        abort();
-                    else
-                        throw std::runtime_error("Unsupported type for VertexAI");
-                }, p);
-            }
-        }
-    }, oai.content);
-}
-
-Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools)
-{
-    if(tools.size() != 0) {
-        throw std::runtime_error("VertexAI does not support tools");
-    }
-    HttpRequestPtr req = HttpRequest::newHttpRequest();
-    req->setPath("/v1beta/models/" + model_name + ":generateContent");
-    req->setPathEncode(false);
-    req->setParameter("key", api_key);
-    req->setMethod(HttpMethod::Post);
-
-    VertexDataBody body;
-
-    std::vector<VertexContent> log;
-
-    // Gemini does not have a "system" role. So we need to merge the system messages into the user messages.
-    // Also Gemini MUST have alternating user and model messages. Else the API breaks
-    VertexContent buffered;
-    std::string last_role;
-    bool first = true;
-
-    for(auto& entry : history) {
-        if(entry.role == "system") {
-            if(!first)
-                throw std::runtime_error("System message must be the first message in the chatlog");
-            if(!std::holds_alternative<std::string>(entry.content))
-                throw std::runtime_error("System message MUST be a string");
-
-            buffered.parts.push_back(VertexTextPart{std::get<std::string>(entry.content)});
-            buffered.role = "user";
-            last_role = "user";
-        }
-        first = false;
-
-        std::string role = (entry.role == "user" ? "user" : "model");
-
-        if(last_role != entry.role) {
-            log.push_back(buffered);
-            buffered = VertexContent{.role = role};
-        }
-
-        VertexContent v;
-        oai2vertexContent(v, entry);
-        for(auto& part : v.parts) {
-            buffered.parts.push_back(part);
-        }
-        last_role = role;
-    }
-    body.contents = std::move(log);
-
-    if(buffered.parts.size() > 0)
-        body.contents.push_back(buffered);
-
-    // TOOD: Add more config options
-    if(config.max_tokens.has_value()) body.generationConfig["maxOutputTokens"] = config.max_tokens.value();
-    if(config.temperature.has_value()) body.generationConfig["temperature"] = config.temperature.value();
-    if(config.top_p.has_value()) body.generationConfig["topP"] = config.top_p.value();
-
-    // Force ignore all safety settings
-    body.safety_settings = {
-        {{"category", "HARM_CATEGORY_HARASSMENT"}, {"threshold", "BLOCK_NONE"}},
-        {{"category", "HARM_CATEGORY_DANGEROUS_CONTENT"}, {"threshold", "BLOCK_NONE"}},
-        {{"category", "HARM_CATEGORY_SEXUALLY_EXPLICIT"}, {"threshold", "BLOCK_NONE"}},
-        {{"category", "HARM_CATEGORY_HATE_SPEECH"}, {"threshold", "BLOCK_NONE"}}
-    };
-
-    std::string body_str = glz::write_json(body).value();
-    LOG_DEBUG << "Request: " << body_str;
-    req->setBody(body_str);
-    req->setContentTypeCode(CT_APPLICATION_JSON);
-    auto resp = co_await client->sendRequestCoro(req);
-    LOG_DEBUG << "Response: " << resp->body();
-    if(resp->statusCode() != k200OK) {
-        VertexError error;
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
-        if(ec)
-            throw std::runtime_error("Failed to parse error response: " + glz::format_error(ec, resp->body()));
-        throw std::runtime_error(error.error.message);
-    }
-
-    VertexResponse response;
-    if(auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body()); ec)
-        throw std::runtime_error("Failed to parse response: " + glz::format_error(ec, resp->body()));
-    if(response.candidates.size() == 0)
-        throw std::runtime_error("Server response does not contain any candidates");
-    if(response.candidates[0].content.parts.size() == 0)
-        throw std::runtime_error("Server response does not contain any content parts");
-
-    if(!std::holds_alternative<VertexTextPart>(response.candidates[0].content.parts[0]))
-        throw std::runtime_error("only supports text responses now");
-    co_return std::get<VertexTextPart>(response.candidates[0].content.parts[0]).text;
 }
 
 std::string PromptTemplate::render() const
@@ -600,14 +442,4 @@ std::string tllf::to_string(const Chatlog& chatlog)
             throw std::runtime_error("Chatlog entry is not a string");
     }
     return res;
-}
-
-void tllf::debug()
-{
-    std::string str = R"({"id":"chatcmpl-Rqag5AU7yfyQlBo7w5LVXkGB","object":"chat.completion","created":1767720902,"model":"meta-llama/Meta-Llama-3-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"name":null,"tool_calls":[{"id":"call_039X7Ei6dYitFQcGMsyjVpCj","type":"function","function":{"name":"execute_bash","arguments":"{\"properties\": {\"command\": \"cat file.txt\"}}"}}]},"finish_reason":"tool_calls","logprobs":null}],"usage":{"prompt_tokens":328,"total_tokens":409,"completion_tokens":81,"estimated_cost":1.47e-05,"prompt_tokens_details":null}})";
-
-    OpenAIResponse resp;
-    auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(resp, str);
-    if(ec)
-        throw std::runtime_error("Failed to parse response: " + glz::format_error(ec, str));
 }

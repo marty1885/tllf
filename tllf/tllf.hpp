@@ -164,27 +164,6 @@ struct OpenAIConnector : public LLM
     std::string api_key;
 };
 
-/**
- * Connector for Vertex AI (ie. Google Gemini) API endpoints.
- *
- * @param model_name The name of the model to use. For example, "gemini-1.5-flash".
- * @param hoststr The host string. Defaults to "https://generativelanguage.googleapis.com/".
- * @param api_key The API key to use
-*/
-struct VertexAIConnector : public LLM
-{
-    VertexAIConnector(const std::string& model_name, const std::string& hoststr="https://generativelanguage.googleapis.com/", const std::string& api_key="")
-        : client(internal::getClient(hoststr)), model_name(model_name), api_key(api_key)
-    {
-    }
-
-    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools = {}) override;
-
-    drogon::HttpClientPtr client;
-    std::string model_name;
-    std::string api_key;
-};
-
 struct PromptTemplate
 {
     PromptTemplate() = default;
@@ -217,7 +196,4 @@ struct PromptTemplate
 };
 
 std::string dataUrlfromFile(const std::string& path, std::string mime="");
-
-void debug();
-
 }
