@@ -19,6 +19,7 @@
 
 #include <tllf/parsers.hpp>
 #include <tllf/utils.hpp>
+#include <tllf/tool.hpp>
 
 namespace tllf
 {
@@ -58,6 +59,7 @@ struct ChatEntry
     using Content = std::variant<std::string, Parts>;
     Content content;
     std::string role;
+    std::optional<std::string> tool_call_id;
 };
 
 struct Chatlog : public std::vector<ChatEntry>
@@ -111,8 +113,8 @@ struct LLM
      * @note This function is a proxy for the real implementation. Which has built-in capablity to handle retry.
      * TODO: Handle rate limiting
     */
-    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig());
-    virtual drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config) = 0;
+    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig(), const std::vector<Tool>& tools = {});
+    virtual drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools = {}) = 0;
 };
 
 struct TextEmbedder
@@ -155,7 +157,7 @@ struct OpenAIConnector : public LLM
 {
     OpenAIConnector(const std::string& model_name, const std::string& baseurl="https://api.openai.com/", const std::string& api_key="");
 
-    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config) override;
+    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools = {});
 
     drogon::HttpClientPtr client;
     std::string base;
@@ -177,7 +179,7 @@ struct VertexAIConnector : public LLM
     {
     }
 
-    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config) override;
+    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools = {}) override;
 
     drogon::HttpClientPtr client;
     std::string model_name;
@@ -216,5 +218,7 @@ struct PromptTemplate
 };
 
 std::string dataUrlfromFile(const std::string& path, std::string mime="");
+
+void debug();
 
 }

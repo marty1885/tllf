@@ -1,5 +1,4 @@
 #include "tllf/tool.hpp"
-#include "tllf/tllf.hpp"
 #include <drogon/utils/coroutine.h>
 #include <drogon/drogon.h>
 #include <glaze/json/write.hpp>
@@ -10,13 +9,13 @@ using namespace tllf;
 using namespace drogon;
 
 
-tllf::ToolResult foo(std::optional<std::string> str, int num)
+tllf::ToolResult foo(std::string str, int num)
 {
     TLLF_DOC("foo")
         .BRIEF("An example tool.")
         .PARAM(str, "a string")
         .PARAM(num, "a number");
-    co_return str.value_or("null") + std::to_string(num);
+    co_return str + std::to_string(num);
 }
 
 tllf::ToolResult bar(double n)
@@ -33,7 +32,7 @@ Task<> func()
     // auto tool2 = co_await toolize(bar);
     std::cout << glz::write_json(tool.makeOpenAIToolObject()).value() << std::endl;
     nlohmann::json json = {
-        {"str2", "Hello"},
+        {"str", "Hello"},
         {"num", 42}
     };
     auto result = co_await tool(json.dump());

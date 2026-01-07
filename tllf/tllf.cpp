@@ -1,3 +1,4 @@
+#include "tllf/tool.hpp"
 #include "tllf/utils.hpp"
 #include <cstddef>
 #include <drogon/HttpTypes.h>
@@ -5,6 +6,7 @@
 #include <drogon/utils/coroutine.h>
 #include <glaze/json.hpp>
 #include <fstream>
+#include <glaze/json/generic.hpp>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +26,12 @@
 
 using namespace tllf;
 using namespace drogon;
+
+struct OpenAIToolDesc
+{
+    std::string type = "function";
+    glz::generic function;
+};
 
 namespace tllf
 {
@@ -140,6 +148,7 @@ struct OpenAIDataBody
     std::optional<int> frequency_penalty;
     std::optional<int> presence_penalty;
     std::optional<int> stop_sequence;
+    std::optional<std::vector<OpenAIToolDesc>> tools;
 
 };
 
@@ -149,9 +158,23 @@ struct OpenAIResponse
     {
         struct Message
         {
-            std::string content;
+            struct ToolCall
+            {
+                std::string id;
+                std::string type;
+
+                struct FunctionInvocation {
+                    std::string name;
+                    std::string arguments;
+                };
+                FunctionInvocation function;
+            };
+            std::optional<std::string> content;
+            std::vector<ToolCall> tool_calls;
         };
         Message message;
+        std::string finish_reason;
+        size_t index;
     };
     std::vector<Choice> choices;
 };
@@ -171,7 +194,7 @@ OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::strin
     client = internal::getClient(url.withFragment("").withParam("").str(), drogon::app().getLoop());
 }
 
-Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
+Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools)
 {
     constexpr int max_retry = 4;
     for(int retry = 0; retry < max_retry; retry++) {
@@ -179,9 +202,10 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
         // By defaul retry after 500ms
         double retry_delay = 0.5;
         try {
-            co_return co_await generateImpl(history, std::move(config));
+            co_return co_await generateImpl(history, std::move(config), tools);
         }
         catch(const RateLimitError& e) {
+            errored = true;
             if(e.until_reset_ms.has_value())
                 retry_delay = e.until_reset_ms.value() / 1000;
         }
@@ -190,7 +214,6 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
                 throw;
             errored = true;
             LOG_WARN << "Request failed. Retrying... " << e.what();
-            retry++;
         }
 
         if(errored) {
@@ -200,7 +223,7 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config)
     throw std::runtime_error("Request failed. Retried " + std::to_string(max_retry) + " times.");
 }
 
-drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGenerationConfig config)
+drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools)
 {
     drogon::HttpRequestPtr req = drogon::HttpRequest::newHttpRequest();
     auto p = std::filesystem::path(base) / "chat/completions";
@@ -210,6 +233,15 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     req->addHeader("Accept", "application/json");
     req->setMethod(drogon::HttpMethod::Post);
 
+    std::vector<OpenAIToolDesc> tools_desc;
+    tools_desc.reserve(tools.size());
+    for(const auto& tool : tools) {
+        tools_desc.push_back({
+            .type = "function",
+            .function = tool.makeOpenAIToolObject()
+        });
+    }
+
     OpenAIDataBody body {
         .model = model_name,
         .messages = std::move(history),
@@ -218,41 +250,84 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
         .top_p = config.top_p,
         .frequency_penalty = config.frequency_penalty,
         .presence_penalty = config.presence_penalty,
-        .stop_sequence = config.stop_sequence
+        .stop_sequence = config.stop_sequence,
+        .tools = tools.empty() ? std::nullopt : std::make_optional(std::move(tools_desc))
     };
 
-    std::string body_str = glz::write_json(body).value();
-    LOG_DEBUG << "Request: " << body_str;
-    req->setBody(body_str);
-    req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-    auto resp = co_await client->sendRequestCoro(req);
-    LOG_DEBUG << "Response: " << resp->body();
-    if(resp->statusCode() == drogon::k429TooManyRequests) {
-        double until_reset = 2.;
-        if(resp->getHeader("Retry-After") != "")
-            until_reset = std::stod(resp->getHeader("Retry-After"));
-        else if(resp->getHeader("X-RateLimit-Reset") != "")
-            until_reset = std::stod(resp->getHeader("X-RateLimit-Reset"));
-        throw RateLimitError(until_reset * 1000);
-    }
-    else if(resp->statusCode() != drogon::k200OK) {
-        OpenAIError error;
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
-        if(ec)
-            throw std::runtime_error(error.detail);
-    }
+    const size_t max_iterations = 30;
 
     OpenAIResponse response;
-    auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
-    if(ec)
-        throw std::runtime_error("Failed to parse response: " + glz::format_error(ec, resp->body()));
-    if(response.choices.size() == 0)
-        throw std::runtime_error("Server response does not contain any choices");
-    auto r = response.choices[0].message.content;
-    // HACK: Deepinfra sometimes returns the prompt in the response. This is a workaround.
-    if(r.starts_with("assistant\n\n"))
-        r = r.substr(11);
-    co_return r;
+    for(size_t i = 0; i < max_iterations; ++i) {
+        std::string body_str = glz::write_json(body).value();
+        LOG_DEBUG << "Request: " << body_str;
+        req->setBody(body_str);
+        req->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+        auto resp = co_await client->sendRequestCoro(req);
+        LOG_DEBUG << "status = " << static_cast<int>(resp->statusCode());
+        LOG_DEBUG << "Response: " << resp->body();
+        if(resp->statusCode() == drogon::k429TooManyRequests) {
+            double until_reset = 2.;
+            if(resp->getHeader("Retry-After") != "")
+                until_reset = std::stod(resp->getHeader("Retry-After"));
+            else if(resp->getHeader("X-RateLimit-Reset") != "")
+                until_reset = std::stod(resp->getHeader("X-RateLimit-Reset"));
+            throw RateLimitError(until_reset * 1000);
+        }
+        // 422 if we fucked up
+        else if(resp->statusCode() != drogon::k200OK) {
+            OpenAIError error;
+            auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
+            if(ec)
+                throw std::runtime_error(error.detail);
+        }
+
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
+        if(ec)
+            throw std::runtime_error("Failed to parse response: " + glz::format_error(ec, resp->body()));
+        if(response.choices.size() == 0)
+            throw std::runtime_error("Server response does not contain any choices");
+        const auto& choice = response.choices[0];
+        if(choice.finish_reason != "tool_calls")
+            break;
+
+        auto tool_calls = choice.message.tool_calls;
+        std::vector<Task<std::string>> invocations;
+        for(auto& tool_call : tool_calls) {
+            auto it = std::find_if(tools.begin(), tools.end(), [&](const auto& tool) {
+                return tool.name == tool_call.function.name;
+            });
+            if(it == tools.end())
+                throw std::runtime_error("Unknown tool: " + tool_call.id);
+            glz::generic json;
+            auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(json, tool_call.function.arguments);
+            if(ec)
+                throw std::runtime_error("Failed to parse arguments: " + glz::format_error(ec, tool_call.function.arguments));
+            std::string args;
+            if(json.contains("properties")) {
+                args = glz::write_json(json.at("properties")).value();
+            }
+            else
+                args = glz::write_json(json).value();
+            invocations.push_back(it->func(args));
+        }
+
+        LOG_DEBUG << "Invoking " << tool_calls.size() << " tools";
+
+        auto res = co_await when_all(std::move(invocations));
+        LOG_DEBUG << "Post-invocation";
+        assert(res.size() == tool_calls.size());
+        for(size_t i = 0; i < res.size(); ++i) {
+            auto& r = res[i];
+            auto& tool = tool_calls[i];
+            body.messages.push_back(ChatEntry{
+                .content = r,
+                .role = "tool",
+                .tool_call_id = tool.id
+            });
+        }
+    }
+
+    co_return response.choices[0].message.content.value_or("");
 }
 
 struct VertexTextPart
@@ -320,8 +395,11 @@ void oai2vertexContent(VertexContent& v, const ChatEntry& oai)
     }, oai.content);
 }
 
-Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGenerationConfig config)
+Task<std::string> VertexAIConnector::generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools)
 {
+    if(tools.size() != 0) {
+        throw std::runtime_error("VertexAI does not support tools");
+    }
     HttpRequestPtr req = HttpRequest::newHttpRequest();
     req->setPath("/v1beta/models/" + model_name + ":generateContent");
     req->setPathEncode(false);
@@ -528,4 +606,14 @@ std::string tllf::to_string(const Chatlog& chatlog)
             throw std::runtime_error("Chatlog entry is not a string");
     }
     return res;
+}
+
+void tllf::debug()
+{
+    std::string str = R"({"id":"chatcmpl-Rqag5AU7yfyQlBo7w5LVXkGB","object":"chat.completion","created":1767720902,"model":"meta-llama/Meta-Llama-3-8B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"name":null,"tool_calls":[{"id":"call_039X7Ei6dYitFQcGMsyjVpCj","type":"function","function":{"name":"execute_bash","arguments":"{\"properties\": {\"command\": \"cat file.txt\"}}"}}]},"finish_reason":"tool_calls","logprobs":null}],"usage":{"prompt_tokens":328,"total_tokens":409,"completion_tokens":81,"estimated_cost":1.47e-05,"prompt_tokens_details":null}})";
+
+    OpenAIResponse resp;
+    auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(resp, str);
+    if(ec)
+        throw std::runtime_error("Failed to parse response: " + glz::format_error(ec, str));
 }

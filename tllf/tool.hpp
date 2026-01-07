@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <drogon/utils/coroutine.h>
+#include <glaze/core/reflect.hpp>
 #include <glaze/json/generic.hpp>
 #include <glaze/json/write.hpp>
 #include <optional>
@@ -15,8 +16,6 @@
 #include <yaml-cpp/emittermanip.h>
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/yaml.h>
-
-#include <tllf/tllf.hpp>
 
 #define TLLF_DOC(name) if(::tllf::g_local_return_doc) co_return ::tllf::ToolDoc::make(name)
 #define BRIEF(x) brief(x)
@@ -128,7 +127,7 @@ struct ToolDoc
         else {
             throw std::invalid_argument("Unsupported parameter type");
         }
-        params.push_back({name, internal::ParamInfo{desc, type, is_specialization_of<std::optional, T>::value}});
+        params.push_back({name, internal::ParamInfo{desc, type, !is_specialization_of<std::optional, T>::value}});
         return *this;
     }
 
@@ -220,7 +219,7 @@ drogon::Task<Tool> toolize(Func&& func)
         param_names[i] = doc.params[i].first;
     }
 
-    auto functor = [func = std::move(func), param_names = std::move(param_names)](const std::string& invoke_data) -> drogon::Task<std::string> {
+    auto functor = [func = std::move(func), param_names = std::move(param_names)](std::string invoke_data) -> drogon::Task<std::string> {
         using FuncType = std::remove_cvref_t<Func>;
         using Traits = tllf::internal::FunctionTrait<FuncType>;
         using InvokeTuple = Traits::ArgTuple;
@@ -229,7 +228,7 @@ drogon::Task<Tool> toolize(Func&& func)
         glz::generic json_data;
         auto ec = glz::read_json(json_data, invoke_data);
         if(ec)
-            throw std::runtime_error("Failed to parse JSON during tool invocation");
+            throw std::runtime_error("Failed to parse JSON during tool invocation. Error: " + glz::format_error(ec, invoke_data));
 
         InvokeTuple tup;
         size_t idx = 0;
