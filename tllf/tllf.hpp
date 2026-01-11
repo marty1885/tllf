@@ -17,7 +17,6 @@
 #include <unordered_set>
 #include <yaml-cpp/node/node.h>
 
-#include <tllf/parsers.hpp>
 #include <tllf/utils.hpp>
 #include <tllf/tool.hpp>
 
@@ -50,6 +49,14 @@ struct ImageByUrl
 {
     ImageUrl image_url;
 };
+
+struct OpenAIToolDesc
+{
+    std::optional<std::string> type = "function";
+    glz::generic function;
+};
+
+extern OpenAIToolDesc web_search_tool;
 
 struct ChatEntry
 {

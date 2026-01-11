@@ -16,7 +16,6 @@ target_sources(tllf PRIVATE
     tllf/tllf.cpp
     tllf/url_parser.cpp
     tllf/tool.cpp
-    tllf/parsers.cpp
     tllf/utils.cpp
 )
 target_link_libraries(tllf PRIVATE Drogon::Drogon)

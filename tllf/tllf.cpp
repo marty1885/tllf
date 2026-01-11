@@ -27,10 +27,8 @@
 using namespace tllf;
 using namespace drogon;
 
-struct OpenAIToolDesc
-{
-    std::optional<std::string> type = "function";
-    glz::generic function;
+OpenAIToolDesc web_search_tool {
+    .type = "web_search"
 };
 
 namespace tllf
@@ -298,10 +296,10 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
                 throw std::runtime_error("Failed to parse arguments: " + glz::format_error(ec, tool_call.function.arguments));
             std::string args;
             // Sone leaway for dumb llms
-            if(json.contains("properties") && json["properties"].is_object()) {
+            if(json.size() == 1 && json.contains("properties") && json["properties"].is_object()) {
                 args = glz::write_json(json.at("properties")).value();
             }
-            else if(json.contains("parameters") && json["parameters"].is_object()) {
+            else if(json.size() == 1 && json.contains("parameters") && json["parameters"].is_object()) {
                 args = glz::write_json(json.at("parameters")).value();
             }
             else
