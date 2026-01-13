@@ -4,6 +4,7 @@
 #include <drogon/HttpTypes.h>
 #include <drogon/utils/Utilities.h>
 #include <drogon/utils/coroutine.h>
+#include <glaze/core/common.hpp>
 #include <glaze/json.hpp>
 #include <fstream>
 #include <glaze/json/generic.hpp>
@@ -26,10 +27,6 @@
 
 using namespace tllf;
 using namespace drogon;
-
-OpenAIToolDesc web_search_tool {
-    .type = "web_search"
-};
 
 namespace tllf
 {
@@ -134,8 +131,6 @@ namespace glz
    };
 }
 
-
-
 struct OpenAIDataBody
 {
     std::string model;
@@ -146,44 +141,22 @@ struct OpenAIDataBody
     std::optional<int> frequency_penalty;
     std::optional<int> presence_penalty;
     std::optional<int> stop_sequence;
-    std::optional<std::vector<OpenAIToolDesc>> tools;
-
+    std::optional<std::vector<std::variant<OpenAIToolDesc, glz::generic>>> tools;
 };
 
-struct OpenAIResponse
+struct OpenAIErrorData
 {
-    struct Choice
-    {
-        struct Message
-        {
-            struct ToolCall
-            {
-                std::string id;
-                std::string type;
-
-                struct FunctionInvocation {
-                    std::string name;
-                    std::string arguments;
-                };
-                FunctionInvocation function;
-            };
-            std::optional<std::string> content;
-            std::vector<ToolCall> tool_calls;
-        };
-        Message message;
-        std::string finish_reason;
-        size_t index;
-    };
-    std::vector<Choice> choices;
+    int code;
+    std::string message;
 };
 
 struct OpenAIError
 {
-    std::string detail;
+    OpenAIErrorData error;
 };
 
-OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::string& hoststr, const std::string& api_key)
-    : model_name(model_name), api_key(api_key)
+OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::string& hoststr, const std::string& api_key, std::vector<glz::generic> builtin_tools)
+    : model_name(model_name), api_key(api_key), builtin_tools(builtin_tools)
 {
     Url url(hoststr);
     if(!url.validate())
@@ -192,7 +165,7 @@ OpenAIConnector::OpenAIConnector(const std::string& model_name, const std::strin
     client = internal::getClient(url.withFragment("").withParam("").str(), drogon::app().getLoop());
 }
 
-Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools)
+Task<std::string> LLM::generate(Chatlog& history, TextGenerationConfig config, const std::vector<Tool>& tools)
 {
     constexpr int max_retry = 4;
     for(int retry = 0; retry < max_retry; retry++) {
@@ -207,6 +180,13 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config, co
             if(e.until_reset_ms.has_value())
                 retry_delay = e.until_reset_ms.value() / 1000;
         }
+        catch(const HttpException& e) {
+            errored = true;
+        }
+        catch(const std::runtime_error& e) {
+            errored = true;
+            LOG_ERROR << "LLM request failed: " << e.what();
+        }
 
         if(errored) {
             co_await drogon::sleepCoro(trantor::EventLoop::getEventLoopOfCurrentThread(), retry_delay);
@@ -215,7 +195,7 @@ Task<std::string> LLM::generate(Chatlog history, TextGenerationConfig config, co
     throw std::runtime_error("Request failed. Retried " + std::to_string(max_retry) + " times.");
 }
 
-drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools)
+drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog& history, TextGenerationConfig config, const std::vector<Tool>& tools)
 {
     drogon::HttpRequestPtr req = drogon::HttpRequest::newHttpRequest();
     auto p = std::filesystem::path(base) / "chat/completions";
@@ -225,18 +205,21 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     req->addHeader("Accept", "application/json");
     req->setMethod(drogon::HttpMethod::Post);
 
-    std::vector<OpenAIToolDesc> tools_desc;
-    tools_desc.reserve(tools.size());
+    std::vector<std::variant<OpenAIToolDesc, glz::generic>> tools_desc;
+    tools_desc.reserve(tools.size() + builtin_tools.size());
     for(const auto& tool : tools) {
-        tools_desc.push_back({
+        tools_desc.push_back(OpenAIToolDesc{
             .type = "function",
             .function = tool.makeOpenAIToolObject()
         });
     }
+    for(const auto& tool : builtin_tools) {
+        tools_desc.push_back(tool);
+    }
 
     OpenAIDataBody body {
         .model = model_name,
-        .messages = std::move(history),
+        .messages = history,
         .max_tokens = config.max_tokens,
         .temperature = config.temperature,
         .top_p = config.top_p,
@@ -251,12 +234,12 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
     OpenAIResponse response;
     for(size_t i = 0; i < max_iterations; ++i) {
         std::string body_str = glz::write_json(body).value();
-        LOG_DEBUG << "Request: " << body_str;
+        LOG_TRACE << "Request: " << body_str;
         req->setBody(body_str);
         req->setContentTypeCode(CT_APPLICATION_JSON);
         auto resp = co_await client->sendRequestCoro(req);
-        LOG_DEBUG << "status = " << static_cast<int>(resp->statusCode());
-        LOG_DEBUG << "Response: " << resp->body();
+        LOG_TRACE << "status = " << static_cast<int>(resp->statusCode());
+        LOG_TRACE << "Response: " << resp->body();
         if(resp->statusCode() == k429TooManyRequests) {
             double until_reset = 2.;
             if(resp->getHeader("Retry-After") != "")
@@ -266,10 +249,13 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
             throw RateLimitError(until_reset * 1000);
         }
         else if(resp->statusCode() != k200OK) {
-            OpenAIError error;
+            std::vector<OpenAIError> error;
             auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(error, resp->body());
             if(ec)
-                throw std::runtime_error(error.detail);
+                throw std::runtime_error("Failed to parse error response: " + glz::format_error(ec, resp->body()));
+            if(error.size() == 0)
+                throw std::runtime_error("Unknown error");
+            throw std::runtime_error(error[0].error.message);
         }
 
         auto ec = glz::read<glz::opts{.error_on_unknown_keys=false}>(response, resp->body());
@@ -277,7 +263,15 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
             throw std::runtime_error("Failed to parse response: " + glz::format_error(ec, resp->body()));
         if(response.choices.size() == 0)
             throw std::runtime_error("Server response does not contain any choices");
+
         const auto& choice = response.choices[0];
+        if(response.choices.empty()) {
+            throw std::runtime_error("Server response does not contain any choices");
+        }
+
+        body.messages.push_back(choice.message);
+        history.push_back(choice.message);
+
         if(choice.finish_reason != "tool_calls")
             break;
 
@@ -304,6 +298,8 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
             }
             else
                 args = tool_call.function.arguments;
+
+            std::cout << "[Running tool: " << it->name << "]" << std::endl;
             invocations.push_back(it->func(args));
         }
         auto res = co_await when_all(std::move(invocations));
@@ -311,15 +307,21 @@ drogon::Task<std::string> OpenAIConnector::generateImpl(Chatlog history, TextGen
         for(size_t i = 0; i < res.size(); ++i) {
             auto& r = res[i];
             auto& tool = tool_calls[i];
-            body.messages.push_back(ChatEntry{
+            ChatEntry ent {
                 .content = r,
                 .role = "tool",
                 .tool_call_id = tool.id
-            });
+            };
+            body.messages.push_back(ent);
+            history.push_back(std::move(ent));
         }
     }
 
-    co_return response.choices[0].message.content.value_or("");
+    if(response.choices.empty() == false && std::holds_alternative<std::string>(response.choices[0].message.content)) {
+        co_return std::get<std::string>(response.choices[0].message.content);
+    }
+
+    co_return "";
 }
 
 std::string PromptTemplate::render() const
@@ -440,4 +442,12 @@ std::string tllf::to_string(const Chatlog& chatlog)
             throw std::runtime_error("Chatlog entry is not a string");
     }
     return res;
+}
+
+glz::generic tllf::modelBuiltinTool(const std::string& name)
+{
+    glz::generic object;
+    // object[name] = glz::generic::object_t();
+    object["type"] = name;
+    return object;
 }

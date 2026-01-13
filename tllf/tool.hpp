@@ -258,4 +258,6 @@ drogon::Task<Tool> toolize(Func&& func)
     co_return Tool{.name = doc.name,.func = std::move(functor), .doc = std::move(doc)};
 }
 
+tllf::Tool modelBuiltinTool();
+
 } // namespace tllf

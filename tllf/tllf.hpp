@@ -56,17 +56,43 @@ struct OpenAIToolDesc
     glz::generic function;
 };
 
-extern OpenAIToolDesc web_search_tool;
+glz::generic modelBuiltinTool(const std::string& name);
 
 struct ChatEntry
 {
+    struct ToolCall
+    {
+        std::string id;
+        std::string type;
+
+        struct FunctionInvocation {
+            std::string name;
+            std::string arguments;
+        };
+        FunctionInvocation function;
+        glz::generic extra_content; // Makes Google happy
+    };
+
     using Part = std::variant<std::string, ImageByUrl>;
     using Parts = std::vector<Part>;
     using Content = std::variant<std::string, Parts>;
     Content content;
     std::string role;
+    std::vector<ToolCall> tool_calls;
     std::optional<std::string> tool_call_id;
 };
+
+struct OpenAIResponse
+{
+    struct Choice
+    {
+        ChatEntry message;
+        std::string finish_reason;
+        size_t index;
+    };
+    std::vector<Choice> choices;
+};
+
 
 struct Chatlog : public std::vector<ChatEntry>
 {
@@ -119,8 +145,9 @@ struct LLM
      * @note This function is a proxy for the real implementation. Which has built-in capablity to handle retry.
      * TODO: Handle rate limiting
     */
-    drogon::Task<std::string> generate(Chatlog history, TextGenerationConfig config = TextGenerationConfig(), const std::vector<Tool>& tools = {});
-    virtual drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools = {}) = 0;
+    drogon::Task<std::string> generate(Chatlog& history, TextGenerationConfig config = TextGenerationConfig(), const std::vector<Tool>& tools = {});
+protected:
+    virtual drogon::Task<std::string> generateImpl(Chatlog& history, TextGenerationConfig config, const std::vector<Tool>& tools = {}) = 0;
 };
 
 struct TextEmbedder
@@ -161,14 +188,15 @@ struct DeepinfraTextEmbedder : public TextEmbedder
 */
 struct OpenAIConnector : public LLM
 {
-    OpenAIConnector(const std::string& model_name, const std::string& baseurl="https://api.openai.com/", const std::string& api_key="");
+    OpenAIConnector(const std::string& model_name, const std::string& baseurl="https://api.openai.com/", const std::string& api_key="", std::vector<glz::generic> builtin_tools = {});
 
-    drogon::Task<std::string> generateImpl(Chatlog history, TextGenerationConfig config, const std::vector<Tool>& tools = {});
+    drogon::Task<std::string> generateImpl(Chatlog& history, TextGenerationConfig config, const std::vector<Tool>& tools = {});
 
     drogon::HttpClientPtr client;
     std::string base;
     std::string model_name;
     std::string api_key;
+    std::vector<glz::generic> builtin_tools;
 };
 
 struct PromptTemplate

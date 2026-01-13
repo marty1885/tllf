@@ -10,7 +10,7 @@ option(TLLF_BUILD_EXAMPLE "Build example" ON)
 option(TLLF_BUILD_TESTS "Build tests" OFF)
 
 add_library(tllf)
-target_include_directories(tllf PUBLIC .)
+target_include_directories(tllf PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_precompile_headers(tllf PRIVATE tllf/pch.hpp)
 target_sources(tllf PRIVATE
     tllf/tllf.cpp
